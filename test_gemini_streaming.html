@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemini Streaming Translation Test</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #eee;
+        }
+        h1 { color: #00d4ff; margin-bottom: 5px; }
+        .subtitle { color: #888; margin-bottom: 20px; }
+        .panel {
+            background: #16213e;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #666;
+        }
+        .status-dot.connected { background: #00ff88; }
+        .status-dot.streaming { background: #ffd700; animation: pulse 0.5s infinite; }
+        .status-dot.speaking { background: #ff6b6b; animation: pulse 0.3s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        button {
+            background: #00d4ff;
+            color: #000;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover { background: #00b8e6; }
+        button:disabled { background: #444; color: #888; cursor: not-allowed; }
+        button.stop { background: #ff6b6b; }
+        button.stop:hover { background: #ff5252; }
+
+        .config {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        label { display: block; margin-bottom: 5px; color: #aaa; }
+        select, input {
+            width: 100%;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #333;
+            background: #0f0f23;
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .mode-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+            background: #00ff88;
+            color: #000;
+        }
+
+        .log {
+            background: #0f0f23;
+            border-radius: 6px;
+            padding: 15px;
+            height: 250px;
+            overflow-y: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .log-entry { margin-bottom: 5px; }
+        .log-entry.event { color: #00d4ff; }
+        .log-entry.source { color: #ffd700; }
+        .log-entry.translation { color: #00ff88; }
+        .log-entry.error { color: #ff6b6b; }
+        .log-entry.audio { color: #888; }
+
+        .translation-display {
+            background: #0f0f23;
+            border-radius: 6px;
+            padding: 20px;
+            min-height: 100px;
+        }
+        .translation-display .source {
+            color: #ffd700;
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        .translation-display .translated {
+            color: #00ff88;
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .translation-display .placeholder {
+            color: #666;
+            font-style: italic;
+        }
+        .streaming-indicator {
+            display: none;
+            color: #ffd700;
+            font-size: 12px;
+            margin-top: 10px;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+        .mute-indicator {
+            display: none;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+            background: #ff6b6b;
+            color: #fff;
+            animation: pulse 0.5s infinite;
+        }
+    </style>
+</head>
+<body>
+    <h1>Gemini Streaming Translation</h1>
+    <p class="subtitle">Real-time translation with persistent Gemini Live session</p>
+
+    <div class="panel">
+        <div class="status">
+            <div class="status-dot" id="statusDot"></div>
+            <span id="statusText">Disconnected</span>
+            <span class="mode-badge" id="modeBadge" style="display: none;">STREAMING</span>
+            <span class="mute-indicator" id="muteIndicator">MIC MUTED</span>
+        </div>
+
+        <div class="config">
+            <div>
+                <label>Server URL</label>
+                <input type="text" id="serverUrl" value="ws://localhost:8001/ws/translate">
+            </div>
+            <div>
+                <label>Target Language</label>
+                <select id="targetLang">
+                    <option value="it">Italian</option>
+                    <option value="en">English</option>
+                    <option value="de">German</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                </select>
+            </div>
+            <div>
+                <label>Gemini Voice</label>
+                <select id="geminiVoice">
+                    <option value="Kore">Kore (Female)</option>
+                    <option value="Aoede">Aoede (Female)</option>
+                    <option value="Charon">Charon (Male)</option>
+                    <option value="Fenrir">Fenrir (Male)</option>
+                    <option value="Puck">Puck (Male)</option>
+                </select>
+            </div>
+        </div>
+
+        <button id="startBtn" onclick="start()">Start Streaming</button>
+        <button id="stopBtn" onclick="stop()" disabled class="stop">Stop</button>
+    </div>
+
+    <div class="panel">
+        <h3>Live Translation</h3>
+        <div class="translation-display">
+            <div class="source" id="sourceText"></div>
+            <div class="translated" id="translatedText"></div>
+            <div class="placeholder" id="placeholder">Speak into your microphone...</div>
+            <div class="streaming-indicator" id="streamingIndicator">Listening and translating in real-time...</div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h3>Event Log</h3>
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let processor = null;
+        let isRecording = false;
+        let audioQueue = [];
+        let isPlaying = false;
+        let isMuted = false;  // Mute mic during audio playback
+        let unmuteTimeout = null;
+
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const logDiv = document.getElementById('log');
+        const sourceText = document.getElementById('sourceText');
+        const translatedText = document.getElementById('translatedText');
+        const placeholder = document.getElementById('placeholder');
+        const modeBadge = document.getElementById('modeBadge');
+        const streamingIndicator = document.getElementById('streamingIndicator');
+        const muteIndicator = document.getElementById('muteIndicator');
+
+        function log(message, type = '') {
+            const entry = document.createElement('div');
+            entry.className = 'log-entry ' + type;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function setStatus(status, state = 'idle') {
+            statusText.textContent = status;
+            statusDot.className = 'status-dot';
+            if (status.includes('Connected')) statusDot.classList.add('connected');
+            if (state === 'streaming') statusDot.classList.add('streaming');
+            if (state === 'speaking') statusDot.classList.add('speaking');
+        }
+
+        async function start() {
+            try {
+                // Get microphone access
+                log('Requesting microphone access...');
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                });
+
+                // Create audio context
+                audioContext = new AudioContext({ sampleRate: 16000 });
+
+                // Connect to WebSocket
+                const serverUrl = document.getElementById('serverUrl').value;
+                log(`Connecting to ${serverUrl}...`);
+
+                ws = new WebSocket(serverUrl);
+                ws.binaryType = 'arraybuffer';
+
+                ws.onopen = () => {
+                    log('WebSocket connected', 'event');
+                    setStatus('Connected - Configuring...');
+                };
+
+                ws.onmessage = async (event) => {
+                    if (event.data instanceof ArrayBuffer) {
+                        // Audio data - queue for playback
+                        const audioData = new Int16Array(event.data);
+                        log(`Received ${audioData.length} audio samples`, 'audio');
+                        queueAudioPlayback(audioData);
+                    } else {
+                        // JSON message
+                        const data = JSON.parse(event.data);
+                        handleMessage(data);
+                    }
+                };
+
+                ws.onclose = () => {
+                    log('WebSocket disconnected', 'error');
+                    setStatus('Disconnected');
+                    stopRecording();
+                    modeBadge.style.display = 'none';
+                    streamingIndicator.style.display = 'none';
+                };
+
+                ws.onerror = (err) => {
+                    log('WebSocket error: ' + err.message, 'error');
+                };
+
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+
+            } catch (err) {
+                log('Error: ' + err.message, 'error');
+                console.error(err);
+            }
+        }
+
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'connected':
+                    log(`Server: ${data.server}, Model: ${data.model}`, 'event');
+                    log(`Voice: ${data.voice}, Streaming: ${data.streaming_supported}`, 'event');
+                    setStatus('Connected - Configuring...');
+
+                    // Configure language
+                    const targetLang = document.getElementById('targetLang').value;
+                    ws.send(JSON.stringify({
+                        type: 'configure',
+                        source_lang: 'auto',
+                        target_lang: targetLang
+                    }));
+                    break;
+
+                case 'configured':
+                    log(`Language: ${data.source_lang} -> ${data.target_lang}`, 'event');
+
+                    // Enable streaming mode
+                    ws.send(JSON.stringify({ type: 'set_streaming', enabled: true }));
+                    break;
+
+                case 'streaming_enabled':
+                    if (data.enabled) {
+                        log('Streaming mode enabled - real-time translation active', 'event');
+                        setStatus('Connected - Streaming', 'streaming');
+                        modeBadge.style.display = 'inline-block';
+                        streamingIndicator.style.display = 'block';
+                        placeholder.style.display = 'none';
+                        startRecording();
+                    } else {
+                        log('Streaming mode disabled', 'event');
+                        modeBadge.style.display = 'none';
+                        streamingIndicator.style.display = 'none';
+                    }
+                    break;
+
+                case 'streaming_session_ready':
+                    log(`Streaming session ready: ${data.source_lang} -> ${data.target_lang}`, 'event');
+                    break;
+
+                case 'source_text':
+                    // Streaming source text (incremental)
+                    if (data.text) {
+                        sourceText.textContent = data.text;
+                        log(`Source: "${data.text}"`, 'source');
+                        setStatus('Connected - Speaking...', 'speaking');
+                    }
+                    break;
+
+                case 'translated_text':
+                    // Streaming translated text (incremental)
+                    if (data.text) {
+                        translatedText.textContent = data.text;
+                        log(`Translation: "${data.text}"`, 'translation');
+                    }
+                    break;
+
+                case 'model_turn_started':
+                    log('Gemini speaking (your audio is buffered)', 'event');
+                    setStatus('Connected - Translating...', 'speaking');
+                    break;
+
+                case 'turn_complete':
+                    log('Turn complete', 'event');
+                    setStatus('Connected - Streaming', 'streaming');
+                    break;
+
+                case 'translation':
+                    // Full translation (buffer mode)
+                    log(`Source: "${data.source_text}"`, 'source');
+                    log(`Translation: "${data.translated_text}"`, 'translation');
+                    sourceText.textContent = data.source_text;
+                    translatedText.textContent = data.translated_text;
+                    break;
+
+                case 'error':
+                    log(`Error: ${data.message}`, 'error');
+                    break;
+
+                default:
+                    log(`Event: ${data.type}`, 'event');
+            }
+        }
+
+        function startRecording() {
+            if (isRecording) return;
+
+            const source = audioContext.createMediaStreamSource(mediaStream);
+
+            // Use ScriptProcessorNode for audio capture
+            processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+            processor.onaudioprocess = (e) => {
+                if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+                // Skip sending audio when muted (during playback)
+                if (isMuted) return;
+
+                const inputData = e.inputBuffer.getChannelData(0);
+
+                // Convert Float32 to Int16
+                const int16Data = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) {
+                    const s = Math.max(-1, Math.min(1, inputData[i]));
+                    int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+
+                // Send as binary (streaming to Gemini)
+                ws.send(int16Data.buffer);
+            };
+
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+
+            isRecording = true;
+            log('Recording started - speak into your microphone', 'event');
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+            }
+        }
+
+        function queueAudioPlayback(int16Data) {
+            // Full duplex mode: don't mute microphone during playback
+            // Echo cancellation should handle feedback
+            // This allows speaking while translation is playing
+            audioQueue.push(int16Data);
+            if (!isPlaying) {
+                playNextChunk();
+            }
+        }
+
+        async function playNextChunk() {
+            if (audioQueue.length === 0) {
+                isPlaying = false;
+                return;
+            }
+
+            isPlaying = true;
+            const int16Data = audioQueue.shift();
+
+            // Convert Int16 to Float32
+            const float32Data = new Float32Array(int16Data.length);
+            for (let i = 0; i < int16Data.length; i++) {
+                float32Data[i] = int16Data[i] / 32768;
+            }
+
+            // Create audio buffer
+            const buffer = audioContext.createBuffer(1, float32Data.length, 16000);
+            buffer.getChannelData(0).set(float32Data);
+
+            // Play
+            const source = audioContext.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioContext.destination);
+            source.onended = () => playNextChunk();
+            source.start();
+        }
+
+        function stop() {
+            stopRecording();
+
+            if (ws) {
+                // Disable streaming before closing
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'set_streaming', enabled: false }));
+                }
+                ws.close();
+                ws = null;
+            }
+
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(t => t.stop());
+                mediaStream = null;
+            }
+
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+
+            audioQueue = [];
+            isPlaying = false;
+
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            modeBadge.style.display = 'none';
+            streamingIndicator.style.display = 'none';
+            placeholder.style.display = 'block';
+            setStatus('Disconnected');
+            log('Stopped', 'event');
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(gh auth:*)",
+      "Bash(docker login:*)",
+      "Bash(curl -s https://fy35oo4hh8loio-8000.proxy.runpod.net/health)",
+      "Bash(curl -v https://fy35oo4hh8loio-8000.proxy.runpod.net/health)",
+      "Bash(curl:*)",
+      "Bash(dir /s /b \"%APPDATA%\\3CX*\")",
+      "Bash(dir /s /b \"%LOCALAPPDATA%\\3CX*\")",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(powershell -Command \"Get-ChildItem -Path ''c:\\projects\\3cx-translator-seamless\\client\\src\\TranslationBridge'' -Include *.csproj, *.json | Select-Object Name, FullName\")",
+      "Bash(docker build:*)",
+      "Bash(docker push:*)",
+      "Bash(gh api:*)",
+      "Bash(docker tag:*)",
+      "Bash(docker manifest inspect:*)"
+    ]
+  }
+}

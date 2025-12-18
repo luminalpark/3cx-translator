@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  gemini-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.gemini
+    image: gemini-translation-server:latest
+    container_name: gemini-translation
+
+    # No GPU required - Gemini inference runs on Google Cloud
+
+    ports:
+      - "8001:8001"
+
+    volumes:
+      - ./logs:/app/logs
+
+    environment:
+      # Required: Google AI Studio API Key
+      # Get yours at: https://aistudio.google.com/app/apikey
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+
+      # Server configuration
+      - SERVER_PORT=8001
+      - SERVER_HOST=0.0.0.0
+
+      # Gemini model configuration
+      # Available models:
+      # - gemini-2.0-flash-exp (default, fast)
+      # - gemini-2.5-flash-native-audio-preview-12-2025 (native audio)
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-exp}
+
+      # Voice configuration
+      # Available voices: Aoede, Charon, Fenrir, Kore, Puck
+      - GEMINI_VOICE=${GEMINI_VOICE:-Kore}
+
+      # Translation defaults
+      - DEFAULT_SOURCE_LANG=${DEFAULT_SOURCE_LANG:-auto}
+      - DEFAULT_TARGET_LANG=${DEFAULT_TARGET_LANG:-it}
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# Optional: Network configuration for multi-service deployments
+# networks:
+#   default:
+#     name: translation-network

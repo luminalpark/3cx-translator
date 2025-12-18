@@ -1,0 +1,16 @@
+# OpenAI Realtime API Translation Server Requirements
+
+# WebSocket client
+websockets>=12.0
+
+# Server framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# Audio processing
+numpy>=1.24.0
+scipy>=1.11.0
+
+# Utilities
+pydantic>=2.5.0
+python-dotenv>=1.0.0

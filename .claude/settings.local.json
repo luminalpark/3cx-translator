@@ -16,7 +16,11 @@
       "Bash(docker push:*)",
       "Bash(gh api:*)",
       "Bash(docker tag:*)",
-      "Bash(docker manifest inspect:*)"
+      "Bash(docker manifest inspect:*)",
+      "Bash(gh repo create:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: 3CX Real-time Translator\n\n- Gemini AI server for speech-to-speech translation\n- .NET Windows client for 3CX integration\n- Docker deployment support\n- Multi-language support \\(auto-detect, DE, ES, EN, FR, IT\\)\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

@@ -275,8 +275,10 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                             for part in content.model_turn.parts:
                                 if hasattr(part, 'inline_data') and part.inline_data:
                                     data = part.inline_data.data
+                                    mime = getattr(part.inline_data, 'mime_type', 'unknown')
                                     # Handle both bytes and base64 string
                                     if isinstance(data, bytes):
+                                        logger.debug(f"[{session.session_id}] Audio chunk: {len(data)} bytes, mime: {mime}")
                                         translated_audio.extend(data)
                                     elif isinstance(data, str):
                                         # Fix base64 padding if needed
@@ -316,7 +318,15 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         # Resample from 24kHz to 16kHz if we got audio
         output_audio = bytes()
         if len(translated_audio) > 0:
-            # Gemini outputs 24kHz audio
+            # Log audio info to help debug sample rate issues
+            num_samples = len(translated_audio) // 2  # 16-bit = 2 bytes per sample
+            duration_24k = num_samples / 24000
+            duration_16k = num_samples / 16000
+            duration_48k = num_samples / 48000
+            logger.info(f"[{session.session_id}] Received audio: {len(translated_audio)} bytes, {num_samples} samples")
+            logger.info(f"[{session.session_id}] Duration if 24kHz: {duration_24k:.2f}s, if 16kHz: {duration_16k:.2f}s, if 48kHz: {duration_48k:.2f}s")
+
+            # Gemini outputs 24kHz audio (verify with logs above if using different model)
             audio_24k = np.frombuffer(bytes(translated_audio), dtype=np.int16)
             audio_16k = resample_audio(audio_24k, 24000, 16000)
             output_audio = audio_16k.tobytes()
@@ -403,7 +413,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             ) as gemini_session:
                 session.gemini_session = gemini_session
                 session.streaming_ready = True
-                logger.info(f"[{session.session_id}] Gemini Live session connected")
+                logger.info(f"[{session.session_id}] Gemini Live session connected (model: {self.config.gemini_model})")
 
                 # Run send and receive loops concurrently
                 async with asyncio.TaskGroup() as tg:
@@ -519,7 +529,11 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                     for part in content.model_turn.parts:
                                         if hasattr(part, 'inline_data') and part.inline_data:
                                             data = part.inline_data.data
+                                            mime = getattr(part.inline_data, 'mime_type', 'unknown')
                                             if isinstance(data, bytes):
+                                                # Log for sample rate debugging
+                                                num_samples = len(data) // 2
+                                                logger.debug(f"[{session.session_id}] Stream chunk: {len(data)} bytes ({num_samples} samples), mime: {mime}")
                                                 # Resample from 24kHz to 16kHz
                                                 audio_24k = np.frombuffer(data, dtype=np.int16)
                                                 audio_16k = resample_audio(audio_24k, 24000, 16000)

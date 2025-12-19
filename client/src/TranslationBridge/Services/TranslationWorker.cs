@@ -55,6 +55,7 @@ public class TranslationWorker : BackgroundService
 
     // Call simulation
     private FileAudioInjector? _fileAudioInjector;
+    private bool _isSimulating = false;  // When true, bypass VAD and send audio directly
 
     public TranslationWorker(
         ILogger<TranslationWorker> logger,
@@ -409,12 +410,36 @@ public class TranslationWorker : BackgroundService
                 LoggerFactory.Create(b => b.AddConsole()).CreateLogger<FileAudioInjector>(),
                 _audioBridge);
 
+            // Enable simulation mode - bypasses VAD
+            _isSimulating = true;
+
             // Subscribe to events
             _fileAudioInjector.OnPlaybackComplete += () =>
             {
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
-                _logger.LogInformation("  📞 Simulazione completata");
+                _logger.LogInformation("  📞 Simulazione completata - invio end_of_turn");
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
+
+                // Disable simulation mode
+                _isSimulating = false;
+
+                // CRITICAL: Send end_of_turn to trigger Gemini to translate all buffered audio
+                Task.Run(async () =>
+                {
+                    try
+                    {
+                        if (_inboundClient != null && _inboundClient.IsStreamingMode)
+                        {
+                            await _inboundClient.SendEndOfTurnAsync();
+                            _logger.LogInformation("  ✓ end_of_turn inviato a Gemini");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error sending end_of_turn");
+                    }
+                });
+
                 _trayService?.UpdateSimulationState(false, null);
             };
 
@@ -449,6 +474,9 @@ public class TranslationWorker : BackgroundService
         _logger.LogInformation("═══════════════════════════════════════════════════════════");
         _logger.LogInformation("  ⏹ Simulazione Chiamata fermata");
         _logger.LogInformation("═══════════════════════════════════════════════════════════");
+
+        // Disable simulation mode
+        _isSimulating = false;
 
         try
         {
@@ -588,6 +616,14 @@ public class TranslationWorker : BackgroundService
         // Skip if translation is paused
         if (!_isTranslationActive) return;
 
+        // During simulation, bypass VAD and send audio directly
+        // The end_of_turn will be sent only when the file playback completes
+        if (_isSimulating)
+        {
+            _ = _inboundClient?.SendAudioChunkAsync(audioData);
+            return;
+        }
+
         var energy = CalculateEnergy(audioData);
         var isSpeech = energy > _config.Vad.Threshold;
 
@@ -601,7 +637,7 @@ public class TranslationWorker : BackgroundService
                     _inboundSpeechStart = DateTime.UtcNow;
                     _logger.LogDebug("[INBOUND] Remote party started speaking");
                 }
-                
+
                 _inboundLastSpeech = DateTime.UtcNow;
                 _inboundBuffer.AddRange(audioData);
                 _ = _inboundClient?.SendAudioChunkAsync(audioData);
@@ -639,8 +675,19 @@ public class TranslationWorker : BackgroundService
 
         if (shouldTranslate && _inboundClient != null)
         {
-            _logger.LogDebug("[INBOUND] Requesting translation");
-            await _inboundClient.RequestTranslationAsync(cancellationToken);
+            // In streaming mode, Gemini handles segmentation with its internal VAD
+            // We should NOT send end_of_turn on every pause - that interrupts translations
+            // end_of_turn is only sent when simulation ends or call ends
+            if (_inboundClient.IsStreamingMode)
+            {
+                // Let Gemini's internal VAD handle translation timing
+                _logger.LogDebug("[INBOUND] Silence detected - Gemini VAD handles segmentation");
+            }
+            else
+            {
+                _logger.LogDebug("[INBOUND] Requesting translation (buffer mode)");
+                await _inboundClient.RequestTranslationAsync(cancellationToken);
+            }
         }
     }
 
@@ -737,8 +784,18 @@ public class TranslationWorker : BackgroundService
                 return;
             }
             
-            _logger.LogDebug("[OUTBOUND] Requesting translation → {Lang}", targetLang);
-            await _outboundClient.RequestTranslationAsync(cancellationToken);
+            // In streaming mode, Gemini handles segmentation with its internal VAD
+            // We should NOT send end_of_turn on every pause - that interrupts translations
+            if (_outboundClient.IsStreamingMode)
+            {
+                // Let Gemini's internal VAD handle translation timing
+                _logger.LogDebug("[OUTBOUND] Silence detected → {Lang} - Gemini VAD handles segmentation", targetLang);
+            }
+            else
+            {
+                _logger.LogDebug("[OUTBOUND] Requesting translation → {Lang} (buffer mode)", targetLang);
+                await _outboundClient.RequestTranslationAsync(cancellationToken);
+            }
         }
     }
 

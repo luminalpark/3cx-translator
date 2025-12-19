@@ -546,9 +546,39 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
         Uses send_realtime_input(audio_stream_end=True) instead of the deprecated
         send(input=None, end_of_turn=True) method.
+
+        IMPORTANT: Wait for all pending audio to be processed before sending end_of_turn:
+        1. Wait for any model turn to complete (pending_audio gets flushed)
+        2. Wait for audio queue to be empty (all chunks sent to Gemini)
         """
         if session.gemini_session and session.streaming_ready and not session.is_closing:
             try:
+                # Wait for model turn to complete and pending audio to be flushed
+                if session.in_model_turn or len(session.pending_audio) > 0:
+                    logger.info(f"[{session.session_id}] Waiting for model turn to complete (pending: {len(session.pending_audio)} chunks)...")
+                    for _ in range(150):  # 150 * 100ms = 15 seconds max
+                        await asyncio.sleep(0.1)
+                        if not session.in_model_turn and len(session.pending_audio) == 0:
+                            break
+                    if session.in_model_turn:
+                        logger.warning(f"[{session.session_id}] Model turn still active after timeout")
+
+                # Wait for audio queue to be empty (all buffered chunks sent to Gemini)
+                if session.audio_queue:
+                    queue_size = session.audio_queue.qsize()
+                    if queue_size > 0:
+                        logger.info(f"[{session.session_id}] Waiting for {queue_size} queued audio chunks to be sent...")
+                        # Wait up to 10 seconds for queue to empty
+                        for _ in range(100):  # 100 * 100ms = 10 seconds max
+                            await asyncio.sleep(0.1)
+                            if session.audio_queue.empty():
+                                break
+                        remaining = session.audio_queue.qsize()
+                        if remaining > 0:
+                            logger.warning(f"[{session.session_id}] Queue still has {remaining} chunks after timeout")
+                        else:
+                            logger.info(f"[{session.session_id}] Audio queue empty, sending end_of_turn")
+
                 logger.info(f"[{session.session_id}] Sending audio_stream_end signal to Gemini")
                 await session.gemini_session.send_realtime_input(audio_stream_end=True)
             except Exception as e:

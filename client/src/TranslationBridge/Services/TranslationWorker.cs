@@ -56,6 +56,7 @@ public class TranslationWorker : BackgroundService
     // Call simulation
     private FileAudioInjector? _fileAudioInjector;
     private bool _isSimulating = false;  // When true, bypass VAD and send audio directly
+    private int _simulationChunksSent = 0;
 
     public TranslationWorker(
         ILogger<TranslationWorker> logger,
@@ -412,12 +413,13 @@ public class TranslationWorker : BackgroundService
 
             // Enable simulation mode - bypasses VAD
             _isSimulating = true;
+            _simulationChunksSent = 0;
 
             // Subscribe to events
             _fileAudioInjector.OnPlaybackComplete += () =>
             {
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
-                _logger.LogInformation("  📞 Simulazione completata");
+                _logger.LogInformation("  📞 Simulazione completata - Chunks totali: {Count}", _simulationChunksSent);
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
 
                 // Disable simulation mode
@@ -607,6 +609,12 @@ public class TranslationWorker : BackgroundService
         if (_isSimulating)
         {
             _ = _inboundClient?.SendAudioChunkAsync(audioData);
+            _simulationChunksSent++;
+            // Log every 40 chunks (~1 second at 25ms chunks)
+            if (_simulationChunksSent % 40 == 0)
+            {
+                _logger.LogInformation("[SIMULATION] Chunks sent: {Count}", _simulationChunksSent);
+            }
             return;
         }
 

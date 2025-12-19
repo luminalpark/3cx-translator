@@ -159,6 +159,10 @@ class ClientSession:
     # Full duplex support: buffer audio during model turns
     in_model_turn: bool = False  # True when Gemini is generating response
     pending_audio: List[bytes] = field(default_factory=list)  # Audio received during model turn
+    # Audio chunk counters for diagnostics
+    chunks_received: int = 0
+    chunks_sent: int = 0
+    last_chunk_time: float = 0.0
 
 
 # =============================================================================
@@ -514,6 +518,10 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                             mime_type="audio/pcm;rate=16000"
                         )
                     )
+                    session.chunks_sent += 1
+                    # Log every 40 chunks (~1 second at 25ms chunks)
+                    if session.chunks_sent % 40 == 0:
+                        logger.info(f"[{session.session_id}] Audio chunks sent to Gemini: {session.chunks_sent}")
 
                 except asyncio.TimeoutError:
                     continue  # Check is_closing and continue
@@ -535,6 +543,11 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         if session.audio_queue and not session.is_closing:
             try:
                 session.audio_queue.put_nowait(audio_data)
+                session.chunks_received += 1
+                session.last_chunk_time = time.time()
+                # Log every 40 chunks (~1 second at 25ms chunks)
+                if session.chunks_received % 40 == 0:
+                    logger.info(f"[{session.session_id}] Audio chunks queued: {session.chunks_received} (queue size: {session.audio_queue.qsize()})")
             except asyncio.QueueFull:
                 logger.warning(f"[{session.session_id}] Audio queue full, dropping chunk")
 
@@ -642,7 +655,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                 if getattr(content, 'turn_complete', False):
                                     turn_count += 1
                                     session.in_model_turn = False
-                                    logger.info(f"[{session.session_id}] Turn {turn_count} complete, waiting for next turn")
+                                    logger.info(f"[{session.session_id}] Turn {turn_count} complete (chunks: queued={session.chunks_received}, sent={session.chunks_sent})")
                                     await session.websocket.send_json({
                                         "type": "turn_complete"
                                     })

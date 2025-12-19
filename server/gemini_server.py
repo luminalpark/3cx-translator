@@ -613,6 +613,8 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
     async def _receive_loop(self, session: ClientSession, gemini_session):
         """Receive responses from Gemini and forward to client"""
+        from google.genai import types
+
         logger.info(f"[{session.session_id}] Receive loop started")
 
         try:
@@ -709,13 +711,21 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                         "type": "turn_complete"
                                     })
 
-                                    # With Automatic VAD: Do NOT send audioStreamEnd after turn_complete
-                                    # - audioStreamEnd is meant for when microphone is paused for >1 second
-                                    # - For continuous audio (like file playback), Gemini's VAD continues
-                                    #   to detect speech automatically without any signal
-                                    # - Sending audioStreamEnd while audio is still streaming confuses Gemini
+                                    # With Manual VAD: After turn_complete, if audio is still streaming,
+                                    # automatically send activity_start to begin the next turn.
+                                    # Check if we received audio recently (within last 2 seconds)
+                                    time_since_last_chunk = time.time() - session.last_chunk_time
+                                    if time_since_last_chunk < 2.0 and session.last_chunk_time > 0:
+                                        logger.info(f"[{session.session_id}] Audio still streaming, sending activity_start for next turn")
+                                        try:
+                                            await gemini_session.send_realtime_input(
+                                                activity_start=types.ActivityStart()
+                                            )
+                                        except Exception as e:
+                                            logger.warning(f"[{session.session_id}] Failed to send auto activity_start: {e}")
+                                    else:
+                                        logger.info(f"[{session.session_id}] No recent audio, waiting for client activity_start")
 
-                                    logger.info(f"[{session.session_id}] Ready for next turn (Automatic VAD - continuous audio)")
                                     break  # Exit inner loop to call receive() again
 
                         except Exception as e:

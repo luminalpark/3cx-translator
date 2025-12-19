@@ -512,18 +512,14 @@ public class TranslationWorker : BackgroundService
 
         try
         {
-            _logger.LogInformation("  🔄 Turn timer: sending activity_end → activity_start");
+            _logger.LogInformation("  🔄 Turn timer: sending activity_end to trigger translation");
 
             // Send activity_end to trigger translation of buffered audio
+            // Server will automatically send activity_start after turn_complete
+            // if audio is still streaming
             await _inboundClient.SendActivityEndAsync();
 
-            // Small delay to allow Gemini to process
-            await Task.Delay(100);
-
-            // Send activity_start to continue receiving audio
-            await _inboundClient.SendActivityStartAsync();
-
-            _logger.LogInformation("  ✓ Turn cycle complete - continuing audio stream");
+            _logger.LogInformation("  ✓ activity_end sent - server will auto-restart after turn_complete");
         }
         catch (Exception ex)
         {

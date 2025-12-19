@@ -662,7 +662,15 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                     await session.websocket.send_json({
                                         "type": "turn_complete"
                                     })
-                                    # After turn completes, log and continue listening for next turn
+
+                                    # After turn completes, send audio_stream_end to force Gemini to
+                                    # process any buffered audio and be ready for new input
+                                    logger.info(f"[{session.session_id}] Sending audio_stream_end to reset VAD state")
+                                    try:
+                                        await gemini_session.send_realtime_input(audio_stream_end=True)
+                                    except Exception as e:
+                                        logger.warning(f"[{session.session_id}] Failed to send audio_stream_end after turn: {e}")
+
                                     logger.info(f"[{session.session_id}] Waiting for next turn...")
                                     break  # Exit inner loop to call receive() again
 

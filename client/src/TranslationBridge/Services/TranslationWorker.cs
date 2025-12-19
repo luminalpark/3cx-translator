@@ -416,7 +416,7 @@ public class TranslationWorker : BackgroundService
             _simulationChunksSent = 0;
 
             // Subscribe to events
-            _fileAudioInjector.OnPlaybackComplete += () =>
+            _fileAudioInjector.OnPlaybackComplete += async () =>
             {
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
                 _logger.LogInformation("  📞 Simulazione completata - Chunks totali: {Count}", _simulationChunksSent);
@@ -425,8 +425,21 @@ public class TranslationWorker : BackgroundService
                 // Disable simulation mode
                 _isSimulating = false;
 
-                // Best practice: Do NOT send end_of_turn
-                // Gemini's internal VAD handles turn detection automatically
+                // Send end_of_turn ONLY at the end of the audio file
+                // This signals Gemini to process any remaining buffered audio
+                _logger.LogInformation("  📤 Sending end_of_turn to flush remaining audio...");
+                try
+                {
+                    if (_inboundClient != null && _inboundClient.IsStreamingMode)
+                    {
+                        await _inboundClient.SendEndOfTurnAsync();
+                        _logger.LogInformation("  ✓ end_of_turn sent");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to send end_of_turn");
+                }
 
                 _trayService?.UpdateSimulationState(false, null);
             };

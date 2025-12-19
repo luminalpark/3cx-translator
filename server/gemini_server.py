@@ -511,7 +511,13 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                     if audio_data is None:  # Poison pill
                         break
 
-                    # Send to Gemini
+                    # Handle special markers
+                    if audio_data == "END_OF_TURN":
+                        logger.info(f"[{session.session_id}] Sending audio_stream_end to Gemini (from queue)")
+                        await gemini_session.send_realtime_input(audio_stream_end=True)
+                        continue
+
+                    # Send audio to Gemini
                     await gemini_session.send_realtime_input(
                         audio=types.Blob(
                             data=audio_data,
@@ -663,15 +669,19 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                         "type": "turn_complete"
                                     })
 
-                                    # DON'T send audio_stream_end here - it corrupts translations
-                                    # Instead, let the audio continue flowing and Gemini will
-                                    # naturally detect new speech via its internal VAD
-                                    # The audio_stream_end should only be sent when the user
-                                    # actually stops speaking (handled by client silence detection)
+                                    # Send audio_stream_end through the queue to ensure proper sequencing
+                                    # This avoids race conditions between audio data and the signal
+                                    logger.info(f"[{session.session_id}] Queueing audio_stream_end signal...")
+                                    if session.audio_queue:
+                                        try:
+                                            # Use a special marker to signal end_of_turn
+                                            session.audio_queue.put_nowait("END_OF_TURN")
+                                        except asyncio.QueueFull:
+                                            logger.warning(f"[{session.session_id}] Queue full, sending end_of_turn directly")
+                                            await gemini_session.send_realtime_input(audio_stream_end=True)
 
-                                    logger.info(f"[{session.session_id}] Waiting for next turn (no audio_stream_end)...")
-                                    # Don't break - stay in receive loop to continue getting responses
-                                    # break  # Exit inner loop to call receive() again
+                                    logger.info(f"[{session.session_id}] Waiting for next turn...")
+                                    break  # Exit inner loop to call receive() again
 
                         except Exception as e:
                             logger.warning(f"[{session.session_id}] Error forwarding response: {e}")

@@ -417,28 +417,14 @@ public class TranslationWorker : BackgroundService
             _fileAudioInjector.OnPlaybackComplete += () =>
             {
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
-                _logger.LogInformation("  📞 Simulazione completata - invio end_of_turn");
+                _logger.LogInformation("  📞 Simulazione completata");
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
 
                 // Disable simulation mode
                 _isSimulating = false;
 
-                // CRITICAL: Send end_of_turn to trigger Gemini to translate all buffered audio
-                Task.Run(async () =>
-                {
-                    try
-                    {
-                        if (_inboundClient != null && _inboundClient.IsStreamingMode)
-                        {
-                            await _inboundClient.SendEndOfTurnAsync();
-                            _logger.LogInformation("  ✓ end_of_turn inviato a Gemini");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Error sending end_of_turn");
-                    }
-                });
+                // Best practice: Do NOT send end_of_turn
+                // Gemini's internal VAD handles turn detection automatically
 
                 _trayService?.UpdateSimulationState(false, null);
             };
@@ -617,7 +603,7 @@ public class TranslationWorker : BackgroundService
         if (!_isTranslationActive) return;
 
         // During simulation, bypass VAD and send audio directly
-        // The end_of_turn will be sent only when the file playback completes
+        // Gemini's internal VAD handles turn detection automatically
         if (_isSimulating)
         {
             _ = _inboundClient?.SendAudioChunkAsync(audioData);
@@ -676,8 +662,7 @@ public class TranslationWorker : BackgroundService
         if (shouldTranslate && _inboundClient != null)
         {
             // In streaming mode, Gemini handles segmentation with its internal VAD
-            // We should NOT send end_of_turn on every pause - that interrupts translations
-            // end_of_turn is only sent when simulation ends or call ends
+            // We should NOT send end_of_turn - let Gemini decide when to translate
             if (_inboundClient.IsStreamingMode)
             {
                 // Let Gemini's internal VAD handle translation timing

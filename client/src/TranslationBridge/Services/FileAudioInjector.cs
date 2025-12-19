@@ -25,9 +25,10 @@ public class FileAudioInjector : IDisposable
     // Target format: 16kHz, 16-bit, mono (same as AudioBridge)
     private readonly WaveFormat _targetFormat = new(16000, 16, 1);
 
-    // Chunk size: ~100ms of audio at 16kHz/16-bit/mono = 3200 bytes
-    private const int ChunkSizeBytes = 3200;
-    private const int ChunkIntervalMs = 100;
+    // Chunk size: ~25ms of audio at 16kHz/16-bit/mono = 800 bytes
+    // Best practice: 20-40ms chunks for real-time streaming
+    private const int ChunkSizeBytes = 800;
+    private const int ChunkIntervalMs = 25;
 
     /// <summary>
     /// Fired when audio chunk is ready to be injected

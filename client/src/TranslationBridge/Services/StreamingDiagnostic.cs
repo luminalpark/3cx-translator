@@ -176,9 +176,10 @@ public class StreamingDiagnostic : IDisposable
             var inputAudio = LoadAndConvertAudio(inputWavPath);
             Log($"Input audio loaded: {inputAudio.Length} bytes ({inputAudio.Length / 32.0:F1}ms at 16kHz)");
 
-            // Send audio in chunks (100ms chunks = 3200 bytes at 16kHz/16bit/mono)
-            const int chunkSize = 3200;
-            const int chunkDelayMs = 100; // Real-time simulation
+            // Send audio in chunks (25ms chunks = 800 bytes at 16kHz/16bit/mono)
+            // Best practice: 20-40ms chunks for real-time streaming
+            const int chunkSize = 800;
+            const int chunkDelayMs = 25; // Real-time simulation
 
             Log("");
             Log($"=== SENDING AUDIO ===");

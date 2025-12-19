@@ -415,7 +415,6 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             session.audio_queue = asyncio.Queue()
             session.streaming_ready = False
             session.in_model_turn = False
-            session.pending_audio.clear()
 
             # Start the main session task that runs within context manager
             session.session_task = asyncio.create_task(
@@ -528,58 +527,27 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         logger.info(f"[{session.session_id}] Send loop ended")
 
     async def send_audio_chunk(self, session: ClientSession, audio_data: bytes):
-        """Queue audio chunk for sending to Gemini"""
+        """Queue audio chunk for sending to Gemini.
+
+        Best practice: Always send audio continuously (full duplex).
+        Do NOT buffer during model turn - Gemini handles this internally.
+        """
         if session.audio_queue and not session.is_closing:
-            # If Gemini is in a model turn, buffer audio to avoid losing it
-            if session.in_model_turn:
-                session.pending_audio.append(audio_data)
-                if len(session.pending_audio) == 1:
-                    logger.info(f"[{session.session_id}] Buffering audio during model turn")
-            else:
-                try:
-                    session.audio_queue.put_nowait(audio_data)
-                except asyncio.QueueFull:
-                    logger.warning(f"[{session.session_id}] Audio queue full, dropping chunk")
+            try:
+                session.audio_queue.put_nowait(audio_data)
+            except asyncio.QueueFull:
+                logger.warning(f"[{session.session_id}] Audio queue full, dropping chunk")
 
     async def send_end_of_turn(self, session: ClientSession):
-        """Signal end of audio stream to Gemini - triggers it to generate a response.
+        """Signal end of audio stream to Gemini.
 
-        Uses send_realtime_input(audio_stream_end=True) instead of the deprecated
-        send(input=None, end_of_turn=True) method.
-
-        IMPORTANT: Wait for all pending audio to be processed before sending end_of_turn:
-        1. Wait for any model turn to complete (pending_audio gets flushed)
-        2. Wait for audio queue to be empty (all chunks sent to Gemini)
+        NOTE: Per best practices, end_of_turn should NOT be sent during normal streaming.
+        Gemini's internal VAD handles turn detection automatically.
+        This method is kept for backward compatibility but should rarely be used.
         """
         if session.gemini_session and session.streaming_ready and not session.is_closing:
             try:
-                # Wait for model turn to complete and pending audio to be flushed
-                if session.in_model_turn or len(session.pending_audio) > 0:
-                    logger.info(f"[{session.session_id}] Waiting for model turn to complete (pending: {len(session.pending_audio)} chunks)...")
-                    for _ in range(150):  # 150 * 100ms = 15 seconds max
-                        await asyncio.sleep(0.1)
-                        if not session.in_model_turn and len(session.pending_audio) == 0:
-                            break
-                    if session.in_model_turn:
-                        logger.warning(f"[{session.session_id}] Model turn still active after timeout")
-
-                # Wait for audio queue to be empty (all buffered chunks sent to Gemini)
-                if session.audio_queue:
-                    queue_size = session.audio_queue.qsize()
-                    if queue_size > 0:
-                        logger.info(f"[{session.session_id}] Waiting for {queue_size} queued audio chunks to be sent...")
-                        # Wait up to 10 seconds for queue to empty
-                        for _ in range(100):  # 100 * 100ms = 10 seconds max
-                            await asyncio.sleep(0.1)
-                            if session.audio_queue.empty():
-                                break
-                        remaining = session.audio_queue.qsize()
-                        if remaining > 0:
-                            logger.warning(f"[{session.session_id}] Queue still has {remaining} chunks after timeout")
-                        else:
-                            logger.info(f"[{session.session_id}] Audio queue empty, sending end_of_turn")
-
-                logger.info(f"[{session.session_id}] Sending audio_stream_end signal to Gemini")
+                logger.info(f"[{session.session_id}] Sending audio_stream_end signal to Gemini (should be rare)")
                 await session.gemini_session.send_realtime_input(audio_stream_end=True)
             except Exception as e:
                 logger.warning(f"[{session.session_id}] Failed to send audio_stream_end: {e}")
@@ -678,19 +646,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                     await session.websocket.send_json({
                                         "type": "turn_complete"
                                     })
-
-                                    # Flush any audio that was buffered during the model turn
-                                    if session.pending_audio:
-                                        pending_count = len(session.pending_audio)
-                                        logger.info(f"[{session.session_id}] Flushing {pending_count} buffered audio chunks")
-                                        for audio_chunk in session.pending_audio:
-                                            try:
-                                                session.audio_queue.put_nowait(audio_chunk)
-                                            except asyncio.QueueFull:
-                                                logger.warning(f"[{session.session_id}] Queue full during flush")
-                                                break
-                                        session.pending_audio.clear()
-
+                                    # No buffering needed - audio is sent continuously (full duplex)
                                     break  # Exit inner loop to call receive() again
 
                         except Exception as e:
@@ -721,7 +677,6 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         session.is_closing = True
         session.streaming_ready = False
         session.in_model_turn = False
-        session.pending_audio.clear()
 
         # Send poison pill to queue
         if session.audio_queue:

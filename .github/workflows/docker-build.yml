@@ -85,7 +85,9 @@ jobs:
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "docker run -d \\\\" >> $GITHUB_STEP_SUMMARY
           echo "  -p 8001:8001 \\\\" >> $GITHUB_STEP_SUMMARY
-          echo "  -e GEMINI_API_KEY=your_api_key \\\\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e GEMINI_API_KEY=your_gemini_key \\\\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e CLIENT_API_KEY=your_client_key \\\\" >> $GITHUB_STEP_SUMMARY
+          echo "  -e GEMINI_MODEL=gemini-2.5-flash-native-audio-preview-12-2025 \\\\" >> $GITHUB_STEP_SUMMARY
           echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

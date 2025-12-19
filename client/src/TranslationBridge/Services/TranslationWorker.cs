@@ -57,6 +57,8 @@ public class TranslationWorker : BackgroundService
     private FileAudioInjector? _fileAudioInjector;
     private bool _isSimulating = false;  // When true, bypass VAD and send audio directly
     private int _simulationChunksSent = 0;
+    private System.Threading.Timer? _turnTimer;  // Timer for periodic activity_end signals
+    private const int TurnIntervalMs = 5000;  // Send activity_end every 5 seconds
 
     public TranslationWorker(
         ILogger<TranslationWorker> logger,
@@ -393,16 +395,18 @@ public class TranslationWorker : BackgroundService
         });
     }
 
-    private void OnSimulateCallRequested(string filePath)
+    private async void OnSimulateCallRequested(string filePath)
     {
         _logger.LogInformation("═══════════════════════════════════════════════════════════");
-        _logger.LogInformation("  📞 Simulazione Chiamata avviata");
+        _logger.LogInformation("  📞 Simulazione Chiamata avviata (Manual VAD)");
         _logger.LogInformation("  File: {Path}", filePath);
+        _logger.LogInformation("  Turn interval: {Interval}ms", TurnIntervalMs);
         _logger.LogInformation("═══════════════════════════════════════════════════════════");
 
         try
         {
             // Stop existing simulation if running
+            StopTurnTimer();
             _fileAudioInjector?.Stop();
             _fileAudioInjector?.Dispose();
 
@@ -416,18 +420,32 @@ public class TranslationWorker : BackgroundService
             _simulationChunksSent = 0;
 
             // Subscribe to events
-            _fileAudioInjector.OnPlaybackComplete += () =>
+            _fileAudioInjector.OnPlaybackComplete += async () =>
             {
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
                 _logger.LogInformation("  📞 Simulazione completata - Chunks totali: {Count}", _simulationChunksSent);
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
 
+                // Stop the turn timer
+                StopTurnTimer();
+
                 // Disable simulation mode
                 _isSimulating = false;
 
-                // With Automatic VAD, Gemini detects speech end automatically
-                // No explicit signal needed - Gemini's VAD handles turn detection
-                _logger.LogInformation("  ℹ️ Waiting for Gemini to complete translation (Automatic VAD)...");
+                // Send final activity_end to trigger last translation
+                _logger.LogInformation("  📤 Sending final activity_end (Manual VAD)...");
+                try
+                {
+                    if (_inboundClient != null && _inboundClient.IsStreamingMode)
+                    {
+                        await _inboundClient.SendActivityEndAsync();
+                        _logger.LogInformation("  ✓ Final activity_end sent - waiting for translation");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to send final activity_end");
+                }
 
                 _trayService?.UpdateSimulationState(false, null);
             };
@@ -441,8 +459,16 @@ public class TranslationWorker : BackgroundService
             // Load and start
             if (_fileAudioInjector.LoadFile(filePath))
             {
-                // With Automatic VAD, Gemini detects speech automatically
-                // No need to send activity_start - just start sending audio
+                // Manual VAD: Send activity_start before audio
+                _logger.LogInformation("  📤 Sending activity_start (Manual VAD)...");
+                if (_inboundClient != null && _inboundClient.IsStreamingMode)
+                {
+                    await _inboundClient.SendActivityStartAsync();
+                }
+
+                // Start periodic turn timer - sends activity_end → activity_start every N seconds
+                StartTurnTimer();
+
                 _fileAudioInjector.Start();
                 _logger.LogInformation("Audio injection started. Duration: {Duration:mm\\:ss}",
                     _fileAudioInjector.Duration);
@@ -460,11 +486,59 @@ public class TranslationWorker : BackgroundService
         }
     }
 
+    private void StartTurnTimer()
+    {
+        StopTurnTimer();
+        _turnTimer = new System.Threading.Timer(
+            OnTurnTimerElapsed,
+            null,
+            TurnIntervalMs,  // First tick after TurnIntervalMs
+            TurnIntervalMs); // Then every TurnIntervalMs
+        _logger.LogDebug("Turn timer started ({Interval}ms interval)", TurnIntervalMs);
+    }
+
+    private void StopTurnTimer()
+    {
+        _turnTimer?.Dispose();
+        _turnTimer = null;
+    }
+
+    private async void OnTurnTimerElapsed(object? state)
+    {
+        if (!_isSimulating || _inboundClient == null || !_inboundClient.IsStreamingMode)
+        {
+            return;
+        }
+
+        try
+        {
+            _logger.LogInformation("  🔄 Turn timer: sending activity_end → activity_start");
+
+            // Send activity_end to trigger translation of buffered audio
+            await _inboundClient.SendActivityEndAsync();
+
+            // Small delay to allow Gemini to process
+            await Task.Delay(100);
+
+            // Send activity_start to continue receiving audio
+            await _inboundClient.SendActivityStartAsync();
+
+            _logger.LogInformation("  ✓ Turn cycle complete - continuing audio stream");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error in turn timer callback");
+        }
+    }
+
     private void OnStopSimulationRequested()
     {
         _logger.LogInformation("═══════════════════════════════════════════════════════════");
         _logger.LogInformation("  ⏹ Simulazione Chiamata fermata");
         _logger.LogInformation("═══════════════════════════════════════════════════════════");
+
+        // Stop the turn timer
+        StopTurnTimer();
 
         // Disable simulation mode
         _isSimulating = false;
@@ -832,7 +906,10 @@ public class TranslationWorker : BackgroundService
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Stopping translation worker...");
-        
+
+        // Stop turn timer if running
+        StopTurnTimer();
+
         _audioBridge.OnInboundAudioCaptured -= OnInboundAudioCaptured;
         _audioBridge.OnOutboundAudioCaptured -= OnOutboundAudioCaptured;
         

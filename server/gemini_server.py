@@ -457,10 +457,11 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         # NOTE: Native audio models automatically choose the output language
         # based on the system instruction - language_code is not supported
         #
-        # AUTOMATIC VAD with tuned parameters for real-time streaming translation.
-        # - High sensitivity for speech detection
-        # - Short silence duration to detect natural pauses quickly
-        # - This enables real-time translation during audio playback
+        # MANUAL VAD: Client controls turn boundaries explicitly.
+        # - Client sends activity_start before speech
+        # - Client sends activity_end after speech (triggers translation)
+        # - For continuous audio like file playback, client sends periodic
+        #   activity_end signals to trigger translations at regular intervals
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -475,11 +476,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=False,
-                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
-                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                    prefix_padding_ms=300,
-                    silence_duration_ms=500  # Detect pauses after 500ms of silence
+                    disabled=True  # Manual VAD - client controls turn boundaries
                 )
             )
         )

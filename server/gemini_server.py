@@ -667,12 +667,17 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                             logger.warning(f"[{session.session_id}] Error forwarding response: {e}")
 
                 except Exception as e:
-                    if "close" in str(e).lower():
-                        logger.info(f"[{session.session_id}] Session closed by server")
+                    error_str = str(e).lower()
+                    # Stop on connection close or terminal errors
+                    if "close" in error_str or "1011" in error_str or "1006" in error_str:
+                        logger.info(f"[{session.session_id}] Session closed by server: {e}")
+                        break
+                    if "unavailable" in error_str or "deadline" in error_str:
+                        logger.warning(f"[{session.session_id}] Gemini service error, stopping: {e}")
                         break
                     logger.warning(f"[{session.session_id}] Receive error: {e}")
-                    # Small delay before retrying
-                    await asyncio.sleep(0.1)
+                    # Delay before retrying on transient errors
+                    await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
             logger.info(f"[{session.session_id}] Receive loop cancelled")

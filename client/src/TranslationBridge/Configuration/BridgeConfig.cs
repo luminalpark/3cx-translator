@@ -8,7 +8,7 @@ public class BridgeConfig
     /// <summary>
     /// Translation server URL (WebSocket)
     /// </summary>
-    public string ServerUrl { get; set; } = "ws://3cxtranslate.luminalpark.com:8001/ws/translate";
+    public string ServerUrl { get; set; } = "ws://3cxtranslate.luminalpark.com/ws/translate";
 
     /// <summary>
     /// Audio device settings for bidirectional translation

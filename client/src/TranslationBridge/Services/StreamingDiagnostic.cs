@@ -212,9 +212,13 @@ public class StreamingDiagnostic : IDisposable
             Log($"Sent {_audioChunksSent} chunks, {_totalBytesSent} bytes total");
             Log("");
 
+            // Signal end of turn to Gemini - this triggers translation response
+            Log("Signaling end_of_turn to Gemini (triggering translation)...");
+            await _client.SendEndOfTurnAsync(ct);
+
             // Wait for remaining translations to arrive
-            Log("Waiting for final translations (10 seconds)...");
-            await Task.Delay(10000, ct);
+            Log("Waiting for translation response (15 seconds)...");
+            await Task.Delay(15000, ct);
 
             // Final statistics
             PrintFinalStats(logPath);

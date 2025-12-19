@@ -272,6 +272,30 @@ public class GeminiClient : IAsyncDisposable
         await SendJsonAsync(request, cancellationToken);
     }
 
+    /// <summary>
+    /// Signal end of turn to Gemini in streaming mode.
+    /// This tells Gemini "I'm done speaking, now translate and respond".
+    /// Required when sending continuous audio (like from a file) without natural pauses.
+    /// </summary>
+    public async Task SendEndOfTurnAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected)
+        {
+            _logger.LogWarning("Cannot send end_of_turn: not connected");
+            return;
+        }
+
+        if (!IsStreamingMode)
+        {
+            _logger.LogWarning("Cannot send end_of_turn: not in streaming mode");
+            return;
+        }
+
+        var request = new { type = "end_of_turn" };
+        await SendJsonAsync(request, cancellationToken);
+        _logger.LogInformation("Sent end_of_turn signal to Gemini");
+    }
+
     public async Task ClearBufferAsync(CancellationToken cancellationToken = default)
     {
         if (!IsConnected) return;
@@ -413,6 +437,10 @@ public class GeminiClient : IAsyncDisposable
 
                 case "turn_complete":
                     _logger.LogDebug("Turn complete");
+                    break;
+
+                case "end_of_turn_sent":
+                    _logger.LogDebug("End of turn acknowledged by server");
                     break;
 
                 case "result":

@@ -537,6 +537,15 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                 except asyncio.QueueFull:
                     logger.warning(f"[{session.session_id}] Audio queue full, dropping chunk")
 
+    async def send_end_of_turn(self, session: ClientSession):
+        """Signal end of turn to Gemini - triggers it to generate a response"""
+        if session.gemini_session and session.streaming_ready and not session.is_closing:
+            try:
+                logger.info(f"[{session.session_id}] Sending end_of_turn signal to Gemini")
+                await session.gemini_session.send(input=None, end_of_turn=True)
+            except Exception as e:
+                logger.warning(f"[{session.session_id}] Failed to send end_of_turn: {e}")
+
     async def _receive_loop(self, session: ClientSession, gemini_session):
         """Receive responses from Gemini and forward to client"""
         logger.info(f"[{session.session_id}] Receive loop started")
@@ -1006,6 +1015,21 @@ async def handle_json_message(
             "type": "auto_detect_enabled",
             "auto_detect": True
         })
+
+    elif msg_type == "end_of_turn":
+        # Signal to Gemini that the user has finished speaking
+        # This triggers Gemini to generate a translation response
+        if session.streaming_enabled and session.streaming_ready:
+            await server.send_end_of_turn(session)
+            await websocket.send_json({
+                "type": "end_of_turn_sent"
+            })
+        else:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Streaming mode not active",
+                "code": "NOT_STREAMING"
+            })
 
     elif msg_type == "clear":
         session.audio_buffer.clear()

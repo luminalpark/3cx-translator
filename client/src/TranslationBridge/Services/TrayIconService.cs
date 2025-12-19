@@ -91,6 +91,21 @@ public class TrayIconService : IDisposable
     /// </summary>
     public event Action? OnTestTranslationRequested;
 
+    /// <summary>
+    /// Fired when call simulation is requested with a WAV file path
+    /// </summary>
+    public event Action<string>? OnSimulateCallRequested;
+
+    /// <summary>
+    /// Fired when call simulation should be stopped
+    /// </summary>
+    public event Action? OnStopSimulationRequested;
+
+    // Simulation state
+    private ToolStripMenuItem? _simulateItem;
+    private ToolStripMenuItem? _stopSimulateItem;
+    private bool _isSimulating = false;
+
     // Supported languages for the menu
     private static readonly Dictionary<string, (string Flag, string Italian, string English)> SupportedLanguages = new()
     {
@@ -258,6 +273,30 @@ public class TrayIconService : IDisposable
         };
         testItem.Click += (s, e) => OnTestTranslationRequested?.Invoke();
         _contextMenu.Items.Add(testItem);
+
+        // === SIMULATION SECTION ===
+        _simulateItem = new ToolStripMenuItem("📞 Simula Chiamata...")
+        {
+            ToolTipText = "Inietta audio da file WAV come se fosse una chiamata in arrivo"
+        };
+        _simulateItem.Click += (s, e) => StartCallSimulation();
+        _contextMenu.Items.Add(_simulateItem);
+
+        _stopSimulateItem = new ToolStripMenuItem("⏹ Ferma Simulazione")
+        {
+            Visible = false,
+            BackColor = Color.FromArgb(255, 200, 200)
+        };
+        _stopSimulateItem.Click += (s, e) => StopCallSimulation();
+        _contextMenu.Items.Add(_stopSimulateItem);
+
+        // === DIAGNOSTIC SECTION ===
+        var diagnosticItem = new ToolStripMenuItem("🔬 Diagnostica Streaming...")
+        {
+            ToolTipText = "Test diagnostico: invia file audio e salva output per analisi"
+        };
+        diagnosticItem.Click += (s, e) => OpenDiagnosticDialog();
+        _contextMenu.Items.Add(diagnosticItem);
 
         _contextMenu.Items.Add(new ToolStripSeparator());
 
@@ -998,19 +1037,157 @@ public class TrayIconService : IDisposable
         using (var g = Graphics.FromImage(bitmap))
         {
             g.Clear(bgColor);
-            
+
             using var font = new Font("Segoe UI", text.Length > 2 ? 5.5f : 7f, FontStyle.Bold);
             using var brush = new SolidBrush(Color.White);
-            
+
             var displayText = text.Length > 2 ? text.Substring(0, 2) : text;
             var size = g.MeasureString(displayText, font);
             var x = (16 - size.Width) / 2;
             var y = (16 - size.Height) / 2;
-            
+
             g.DrawString(displayText, font, brush, x, y);
         }
-        
+
         return Icon.FromHandle(bitmap.GetHicon());
+    }
+
+    /// <summary>
+    /// Open diagnostic dialog for streaming translation testing
+    /// </summary>
+    private void OpenDiagnosticDialog()
+    {
+        _logger.LogInformation("Opening diagnostic dialog");
+
+        Task.Run(() =>
+        {
+            try
+            {
+                var thread = new Thread(() =>
+                {
+                    Application.EnableVisualStyles();
+                    using var dialog = new DiagnosticDialog(_config);
+                    dialog.ShowDialog();
+                });
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+                thread.Join();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error opening diagnostic dialog");
+            }
+        });
+    }
+
+    /// <summary>
+    /// Start call simulation - opens file dialog to select WAV file
+    /// </summary>
+    private void StartCallSimulation()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Seleziona file audio per simulazione chiamata",
+            Filter = "File WAV|*.wav|Tutti i file audio|*.wav;*.mp3|Tutti i file|*.*",
+            FilterIndex = 1,
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        // Try to find default location (tools folder)
+        var toolsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "tools");
+        if (Directory.Exists(toolsPath))
+        {
+            dialog.InitialDirectory = Path.GetFullPath(toolsPath);
+        }
+
+        if (dialog.ShowDialog() == DialogResult.OK)
+        {
+            var filePath = dialog.FileName;
+            var fileName = Path.GetFileName(filePath);
+
+            _logger.LogInformation("Starting call simulation with file: {Path}", filePath);
+
+            // Check if translation is active, if not ask to activate
+            if (!_isTranslationActive)
+            {
+                var result = MessageBox.Show(
+                    "La traduzione non è attiva.\n\nVuoi attivarla ora per la simulazione?",
+                    "Traduzione non attiva",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
+                {
+                    OnTranslationToggled?.Invoke(true);
+                    UpdateTranslationState(true);
+                }
+                else
+                {
+                    return;
+                }
+            }
+
+            // Fire event to start simulation
+            OnSimulateCallRequested?.Invoke(filePath);
+
+            // Update UI
+            UpdateSimulationState(true, fileName);
+
+            ShowNotification("Simulazione Avviata",
+                $"File: {fileName}\n\nL'audio verrà iniettato come chiamata in arrivo.");
+        }
+    }
+
+    /// <summary>
+    /// Stop call simulation
+    /// </summary>
+    private void StopCallSimulation()
+    {
+        _logger.LogInformation("Stopping call simulation");
+        OnStopSimulationRequested?.Invoke();
+        UpdateSimulationState(false, null);
+        ShowNotification("Simulazione Terminata", "La simulazione è stata fermata.");
+    }
+
+    /// <summary>
+    /// Update simulation state (can be called externally when simulation completes)
+    /// </summary>
+    public void UpdateSimulationState(bool isSimulating, string? fileName)
+    {
+        _isSimulating = isSimulating;
+
+        if (_simulateItem == null || _stopSimulateItem == null)
+            return;
+
+        // Use Invoke for thread safety
+        if (_contextMenu?.InvokeRequired == true)
+        {
+            _contextMenu.Invoke(() => UpdateSimulationStateUI(isSimulating, fileName));
+        }
+        else
+        {
+            UpdateSimulationStateUI(isSimulating, fileName);
+        }
+    }
+
+    private void UpdateSimulationStateUI(bool isSimulating, string? fileName)
+    {
+        if (_simulateItem == null || _stopSimulateItem == null)
+            return;
+
+        if (isSimulating)
+        {
+            _simulateItem.Text = $"📞 Simulando: {fileName ?? "..."}";
+            _simulateItem.Enabled = false;
+            _stopSimulateItem.Visible = true;
+        }
+        else
+        {
+            _simulateItem.Text = "📞 Simula Chiamata...";
+            _simulateItem.Enabled = true;
+            _stopSimulateItem.Visible = false;
+        }
     }
 
     public void Dispose()

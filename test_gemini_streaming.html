@@ -231,6 +231,13 @@
             logDiv.scrollTop = logDiv.scrollHeight;
         }
 
+        // Normalize BCP-47 language codes to simple 2-letter codes
+        // Gemini doesn't accept extended codes like 'es-ES', only 'es'
+        function normalizeLanguageCode(code) {
+            if (!code || code === 'auto') return code;
+            return code.split('-')[0].split('_')[0].toLowerCase();
+        }
+
         function setStatus(status, state = 'idle') {
             statusText.textContent = status;
             statusDot.className = 'status-dot';
@@ -308,8 +315,8 @@
                     log(`Voice: ${data.voice}, Streaming: ${data.streaming_supported}`, 'event');
                     setStatus('Connected - Configuring...');
 
-                    // Configure language
-                    const targetLang = document.getElementById('targetLang').value;
+                    // Configure language (normalize codes for Gemini compatibility)
+                    const targetLang = normalizeLanguageCode(document.getElementById('targetLang').value);
                     ws.send(JSON.stringify({
                         type: 'configure',
                         source_lang: 'auto',

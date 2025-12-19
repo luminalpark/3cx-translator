@@ -35,7 +35,7 @@ public class TestTranslationDialog : Form
     private int _recordingSeconds;
     private bool _isRecording;
 
-    private readonly SeamlessClient _client;
+    private readonly GeminiClient _client;
     private byte[]? _translatedAudio;
     private int _translatedSampleRate = 16000;
 
@@ -60,7 +60,7 @@ public class TestTranslationDialog : Form
         { "tr", "Türkçe" }
     };
 
-    public TestTranslationDialog(SeamlessClient client)
+    public TestTranslationDialog(GeminiClient client)
     {
         _client = client;
 

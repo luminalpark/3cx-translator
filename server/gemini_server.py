@@ -86,12 +86,14 @@ class ServerConfig:
 # Language Mappings
 # =============================================================================
 
+# Gemini native audio model only accepts simple 2-letter language codes
+# NOT BCP-47 codes like "es-ES" - those cause "Unsupported language code" errors
 GEMINI_LANG_CODES = {
-    "de": "de-DE", "german": "de-DE", "deu": "de-DE",
-    "es": "es-ES", "spanish": "es-ES", "spa": "es-ES",
-    "en": "en-US", "english": "en-US", "eng": "en-US",
-    "fr": "fr-FR", "french": "fr-FR", "fra": "fr-FR",
-    "it": "it-IT", "italian": "it-IT", "ita": "it-IT",
+    "de": "de", "german": "de", "deu": "de", "de-de": "de", "de-at": "de", "de-ch": "de",
+    "es": "es", "spanish": "es", "spa": "es", "es-es": "es", "es-mx": "es", "es-ar": "es",
+    "en": "en", "english": "en", "eng": "en", "en-us": "en", "en-gb": "en", "en-au": "en",
+    "fr": "fr", "french": "fr", "fra": "fr", "fr-fr": "fr", "fr-ca": "fr", "fr-be": "fr",
+    "it": "it", "italian": "it", "ita": "it", "it-it": "it", "it-ch": "it",
 }
 
 LANGUAGE_NAMES = {
@@ -103,6 +105,29 @@ LANGUAGE_NAMES = {
 }
 
 SUPPORTED_LANGUAGES = ["de", "es", "en", "fr", "it"]
+
+
+def normalize_language_code(code: str) -> str:
+    """
+    Normalize language codes to simple 2-letter format.
+    Gemini native audio model doesn't accept BCP-47 codes like 'es-ES'.
+
+    Examples:
+        'es-ES' -> 'es'
+        'de-DE' -> 'de'
+        'en-US' -> 'en'
+        'auto' -> 'auto'
+    """
+    if not code or code == "auto":
+        return code
+
+    # First check if it's already in our mapping
+    code_lower = code.lower()
+    if code_lower in GEMINI_LANG_CODES:
+        return GEMINI_LANG_CODES[code_lower]
+
+    # Otherwise, take the primary subtag (before any dash or underscore)
+    return code.split('-')[0].split('_')[0].lower()
 
 
 # =============================================================================
@@ -242,7 +267,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         )
 
         # Get target language BCP-47 code
-        target_bcp47 = GEMINI_LANG_CODES.get(session.target_lang, "it-IT")
+        target_bcp47 = GEMINI_LANG_CODES.get(session.target_lang.lower(), session.target_lang)
 
         # Configure Gemini Live session
         config = types.LiveConnectConfig(
@@ -424,7 +449,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         )
 
         # Get target language BCP-47 code
-        target_bcp47 = GEMINI_LANG_CODES.get(session.target_lang, "it-IT")
+        target_bcp47 = GEMINI_LANG_CODES.get(session.target_lang.lower(), session.target_lang)
 
         # Configure Gemini Live session
         config = types.LiveConnectConfig(
@@ -815,9 +840,9 @@ async def handle_json_message(
     msg_type = data.get("type", "")
 
     if msg_type == "configure" or msg_type == "config":
-        # Update language configuration
-        new_source = data.get("source_lang", session.source_lang)
-        new_target = data.get("target_lang", session.target_lang)
+        # Update language configuration - normalize codes first (es-ES -> es)
+        new_source = normalize_language_code(data.get("source_lang", session.source_lang))
+        new_target = normalize_language_code(data.get("target_lang", session.target_lang))
 
         # Validate languages
         if new_source != "auto" and new_source not in SUPPORTED_LANGUAGES:
@@ -960,8 +985,8 @@ async def handle_json_message(
             })
 
     elif msg_type == "set_language":
-        # Override source language
-        new_lang = data.get("source_lang")
+        # Override source language - normalize code first (es-ES -> es)
+        new_lang = normalize_language_code(data.get("source_lang", ""))
         if new_lang and new_lang in SUPPORTED_LANGUAGES:
             session.source_lang = new_lang
             session.last_detected_lang = new_lang

@@ -24,8 +24,8 @@ public class TranslationWorker : BackgroundService
     private readonly AudioBridge _audioBridge;
     
     // Two WebSocket clients for bidirectional translation
-    private SeamlessClient? _inboundClient;   // Remote lang → Local lang
-    private SeamlessClient? _outboundClient;  // Local lang → Remote lang
+    private GeminiClient? _inboundClient;   // Remote lang -> Local lang
+    private GeminiClient? _outboundClient;  // Local lang -> Remote lang
     
     // Language state
     private string _currentMode = "auto";  // "auto" or specific language code
@@ -52,6 +52,9 @@ public class TranslationWorker : BackgroundService
     private DateTime _outboundLastSpeech;
     private bool _outboundIsSpeaking;
     private readonly object _outboundLock = new();
+
+    // Call simulation
+    private FileAudioInjector? _fileAudioInjector;
 
     public TranslationWorker(
         ILogger<TranslationWorker> logger,
@@ -92,12 +95,12 @@ public class TranslationWorker : BackgroundService
             var loggerFactory = LoggerFactory.Create(builder => 
                 builder.AddConsole().SetMinimumLevel(LogLevel.Information));
             
-            _inboundClient = new SeamlessClient(
-                loggerFactory.CreateLogger<SeamlessClient>(),
+            _inboundClient = new GeminiClient(
+                loggerFactory.CreateLogger<GeminiClient>(),
                 Options.Create(_config));
-            
-            _outboundClient = new SeamlessClient(
-                loggerFactory.CreateLogger<SeamlessClient>(),
+
+            _outboundClient = new GeminiClient(
+                loggerFactory.CreateLogger<GeminiClient>(),
                 Options.Create(_config));
 
             // Connect inbound client (Remote → Local)
@@ -107,10 +110,15 @@ public class TranslationWorker : BackgroundService
                 _currentMode == "auto" ? "auto" : _currentMode,
                 _config.Languages.LocalLanguage,
                 stoppingToken);
-            
+
+            // Enable streaming mode for real-time translation
+            await _inboundClient.SetStreamingModeAsync(true, stoppingToken);
+
             _inboundClient.OnAudioReceived += OnInboundTranslatedAudio;
             _inboundClient.OnTranslationSkipped += OnInboundTranslationSkipped;
             _inboundClient.OnLanguageDetected += OnRemoteLanguageDetected;
+            _inboundClient.OnStreamingTranslatedText += text =>
+                _logger.LogDebug("[INBOUND] Streaming: {Text}", text);
 
             // Connect outbound client (Local → Remote)
             _logger.LogInformation("Connecting OUTBOUND translator...");
@@ -119,9 +127,14 @@ public class TranslationWorker : BackgroundService
                 _config.Languages.LocalLanguage,
                 _currentOutboundTarget,
                 stoppingToken);
-            
+
+            // Enable streaming mode for real-time translation
+            await _outboundClient.SetStreamingModeAsync(true, stoppingToken);
+
             _outboundClient.OnAudioReceived += OnOutboundTranslatedAudio;
             _outboundClient.OnTranslationSkipped += OnOutboundTranslationSkipped;
+            _outboundClient.OnStreamingTranslatedText += text =>
+                _logger.LogDebug("[OUTBOUND] Streaming: {Text}", text);
 
             // Send voice reference if configured
             await SendVoiceReferenceAsync(stoppingToken);
@@ -176,6 +189,8 @@ public class TranslationWorker : BackgroundService
             _trayService.OnTranslationToggled += OnTranslationToggled;
             _trayService.OnVoiceChanged += OnVoiceChanged;
             _trayService.OnTestTranslationRequested += OnTestTranslationRequested;
+            _trayService.OnSimulateCallRequested += OnSimulateCallRequested;
+            _trayService.OnStopSimulationRequested += OnStopSimulationRequested;
             _trayService.Initialize();
         }
         catch (Exception ex)
@@ -376,6 +391,75 @@ public class TranslationWorker : BackgroundService
         });
     }
 
+    private void OnSimulateCallRequested(string filePath)
+    {
+        _logger.LogInformation("═══════════════════════════════════════════════════════════");
+        _logger.LogInformation("  📞 Simulazione Chiamata avviata");
+        _logger.LogInformation("  File: {Path}", filePath);
+        _logger.LogInformation("═══════════════════════════════════════════════════════════");
+
+        try
+        {
+            // Stop existing simulation if running
+            _fileAudioInjector?.Stop();
+            _fileAudioInjector?.Dispose();
+
+            // Create new injector
+            _fileAudioInjector = new FileAudioInjector(
+                LoggerFactory.Create(b => b.AddConsole()).CreateLogger<FileAudioInjector>(),
+                _audioBridge);
+
+            // Subscribe to events
+            _fileAudioInjector.OnPlaybackComplete += () =>
+            {
+                _logger.LogInformation("═══════════════════════════════════════════════════════════");
+                _logger.LogInformation("  📞 Simulazione completata");
+                _logger.LogInformation("═══════════════════════════════════════════════════════════");
+                _trayService?.UpdateSimulationState(false, null);
+            };
+
+            _fileAudioInjector.OnProgressChanged += (position, duration) =>
+            {
+                _logger.LogDebug("Simulation progress: {Position:mm\\:ss} / {Duration:mm\\:ss}",
+                    position, duration);
+            };
+
+            // Load and start
+            if (_fileAudioInjector.LoadFile(filePath))
+            {
+                _fileAudioInjector.Start();
+                _logger.LogInformation("Audio injection started. Duration: {Duration:mm\\:ss}",
+                    _fileAudioInjector.Duration);
+            }
+            else
+            {
+                _logger.LogError("Failed to load audio file: {Path}", filePath);
+                _trayService?.UpdateSimulationState(false, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error starting call simulation");
+            _trayService?.UpdateSimulationState(false, null);
+        }
+    }
+
+    private void OnStopSimulationRequested()
+    {
+        _logger.LogInformation("═══════════════════════════════════════════════════════════");
+        _logger.LogInformation("  ⏹ Simulazione Chiamata fermata");
+        _logger.LogInformation("═══════════════════════════════════════════════════════════");
+
+        try
+        {
+            _fileAudioInjector?.Stop();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error stopping call simulation");
+        }
+    }
+
     private void OnAutoDetectEnabled()
     {
         lock (_languageLock)
@@ -463,7 +547,7 @@ public class TranslationWorker : BackgroundService
         }
     }
 
-    private async Task ConnectWithRetryAsync(SeamlessClient client, CancellationToken cancellationToken)
+    private async Task ConnectWithRetryAsync(GeminiClient client, CancellationToken cancellationToken)
     {
         var retryDelay = TimeSpan.FromSeconds(2);
         var maxRetries = 10;

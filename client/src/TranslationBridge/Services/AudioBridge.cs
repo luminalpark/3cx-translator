@@ -24,13 +24,11 @@ public class AudioBridge : IDisposable
     
     // Inbound: Remote party audio (from 3CX)
     private WasapiCapture? _inboundCapture;
-    private WasapiOut? _inboundPlayback;
-    private BufferedWaveProvider? _inboundBuffer;
-    
+    private AudioPlaybackBuffer? _inboundPlaybackBuffer;  // Buffered playback with preroll
+
     // Outbound: Operator audio (to 3CX)
     private WasapiCapture? _outboundCapture;
-    private WasapiOut? _outboundPlayback;
-    private BufferedWaveProvider? _outboundBuffer;
+    private AudioPlaybackBuffer? _outboundPlaybackBuffer;  // Buffered playback with preroll
     
     private readonly WaveFormat _waveFormat;
     private bool _isRunning;
@@ -136,15 +134,18 @@ public class AudioBridge : IDisposable
         // Setup inbound capture (loopback from 3CX speaker)
         _inboundCapture = new WasapiLoopbackCapture(inboundCaptureDevice);
         _inboundCapture.DataAvailable += OnInboundDataAvailable;
-        
-        // Setup inbound playback buffer (translated audio to operator)
-        _inboundBuffer = new BufferedWaveProvider(_waveFormat)
-        {
-            BufferDuration = TimeSpan.FromSeconds(5),
-            DiscardOnBufferOverflow = true
-        };
-        _inboundPlayback = new WasapiOut(inboundPlaybackDevice, AudioClientShareMode.Shared, true, 100);
-        _inboundPlayback.Init(_inboundBuffer);
+
+        // Setup inbound playback with preroll buffer (translated audio to operator)
+        // Preroll prevents choppy audio from small streaming chunks
+        _inboundPlaybackBuffer = new AudioPlaybackBuffer(
+            _logger,
+            _waveFormat,
+            prerollMs: 1000,      // Buffer 1000ms before starting playback
+            silenceTimeoutMs: 3000);
+        _inboundPlaybackBuffer.Initialize(inboundPlaybackDevice);
+        _inboundPlaybackBuffer.OnPlaybackStarted += () =>
+            _logger.LogDebug("[INBOUND] Playback started after preroll");
+        _logger.LogInformation("Inbound playback buffer: 1000ms preroll enabled");
         
         // ============================================================
         // OUTBOUND PATH: Operator → Remote Party
@@ -181,15 +182,17 @@ public class AudioBridge : IDisposable
         // Setup outbound capture (operator's real microphone)
         _outboundCapture = new WasapiCapture(outboundCaptureDevice);
         _outboundCapture.DataAvailable += OnOutboundDataAvailable;
-        
-        // Setup outbound playback buffer (translated audio to remote party)
-        _outboundBuffer = new BufferedWaveProvider(_waveFormat)
-        {
-            BufferDuration = TimeSpan.FromSeconds(5),
-            DiscardOnBufferOverflow = true
-        };
-        _outboundPlayback = new WasapiOut(outboundPlaybackDevice, AudioClientShareMode.Shared, true, 100);
-        _outboundPlayback.Init(_outboundBuffer);
+
+        // Setup outbound playback with preroll buffer (translated audio to remote party)
+        _outboundPlaybackBuffer = new AudioPlaybackBuffer(
+            _logger,
+            _waveFormat,
+            prerollMs: 1000,      // Buffer 1000ms before starting playback
+            silenceTimeoutMs: 3000);
+        _outboundPlaybackBuffer.Initialize(outboundPlaybackDevice);
+        _outboundPlaybackBuffer.OnPlaybackStarted += () =>
+            _logger.LogDebug("[OUTBOUND] Playback started after preroll");
+        _logger.LogInformation("Outbound playback buffer: 1000ms preroll enabled");
         
         _logger.LogInformation("=== Audio Bridge Initialized (Bidirectional) ===");
     }
@@ -197,45 +200,58 @@ public class AudioBridge : IDisposable
     public void Start()
     {
         if (_isRunning) return;
-        
+
         _inboundCapture?.StartRecording();
-        _inboundPlayback?.Play();
+        _inboundPlaybackBuffer?.Start();
         _outboundCapture?.StartRecording();
-        _outboundPlayback?.Play();
-        
+        _outboundPlaybackBuffer?.Start();
+
         _isRunning = true;
-        _logger.LogInformation("Audio bridge started (bidirectional)");
+        _logger.LogInformation("Audio bridge started (bidirectional, preroll buffering enabled)");
     }
 
     public void Stop()
     {
         if (!_isRunning) return;
-        
+
         _inboundCapture?.StopRecording();
-        _inboundPlayback?.Stop();
+        _inboundPlaybackBuffer?.Stop();
         _outboundCapture?.StopRecording();
-        _outboundPlayback?.Stop();
-        
+        _outboundPlaybackBuffer?.Stop();
+
         _isRunning = false;
         _logger.LogInformation("Audio bridge stopped");
     }
 
     /// <summary>
-    /// Play translated INBOUND audio (remote→local translation) to operator's headphones
+    /// Play translated INBOUND audio (remote→local translation) to operator's headphones.
+    /// Audio is buffered with preroll to prevent choppy playback from small streaming chunks.
     /// </summary>
     public void PlayInboundAudio(byte[] audioData)
     {
-        _inboundBuffer?.AddSamples(audioData, 0, audioData.Length);
-        _logger.LogDebug("Queued {Bytes} bytes for operator playback", audioData.Length);
+        _inboundPlaybackBuffer?.AddAudio(audioData);
     }
 
     /// <summary>
-    /// Play translated OUTBOUND audio (local→remote translation) to 3CX microphone
+    /// Inject audio data as if it came from inbound capture (for testing/simulation).
+    /// This allows simulating a caller by playing a WAV file through the translation pipeline.
+    /// </summary>
+    public void InjectInboundAudio(byte[] audioData)
+    {
+        if (audioData.Length > 0)
+        {
+            OnInboundAudioCaptured?.Invoke(audioData);
+            _logger.LogDebug("Injected {Bytes} bytes as inbound audio", audioData.Length);
+        }
+    }
+
+    /// <summary>
+    /// Play translated OUTBOUND audio (local→remote translation) to 3CX microphone.
+    /// Audio is buffered with preroll to prevent choppy playback from small streaming chunks.
     /// </summary>
     public void PlayOutboundAudio(byte[] audioData)
     {
-        _outboundBuffer?.AddSamples(audioData, 0, audioData.Length);
-        _logger.LogDebug("Queued {Bytes} bytes for 3CX microphone", audioData.Length);
+        _outboundPlaybackBuffer?.AddAudio(audioData);
     }
 
     private void OnInboundDataAvailable(object? sender, WaveInEventArgs e)
@@ -357,9 +373,9 @@ public class AudioBridge : IDisposable
         Stop();
 
         _inboundCapture?.Dispose();
-        _inboundPlayback?.Dispose();
+        _inboundPlaybackBuffer?.Dispose();
         _outboundCapture?.Dispose();
-        _outboundPlayback?.Dispose();
+        _outboundPlaybackBuffer?.Dispose();
     }
 }
 

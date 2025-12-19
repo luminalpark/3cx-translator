@@ -56,7 +56,7 @@ logger = logging.getLogger("gemini_server")
 class ServerConfig:
     """Server configuration from environment variables"""
     gemini_api_key: str
-    gemini_model: str = "gemini-2.0-flash-exp"
+    gemini_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
     gemini_voice: str = "Kore"
     server_host: str = "0.0.0.0"
     server_port: int = 8001
@@ -76,7 +76,7 @@ class ServerConfig:
 
         return cls(
             gemini_api_key=api_key,
-            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash-exp"),
+            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025"),
             gemini_voice=os.environ.get("GEMINI_VOICE", "Kore"),
             server_host=os.environ.get("SERVER_HOST", "0.0.0.0"),
             server_port=int(os.environ.get("SERVER_PORT", "8001")),
@@ -542,13 +542,17 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                     logger.warning(f"[{session.session_id}] Audio queue full, dropping chunk")
 
     async def send_end_of_turn(self, session: ClientSession):
-        """Signal end of turn to Gemini - triggers it to generate a response"""
+        """Signal end of audio stream to Gemini - triggers it to generate a response.
+
+        Uses send_realtime_input(audio_stream_end=True) instead of the deprecated
+        send(input=None, end_of_turn=True) method.
+        """
         if session.gemini_session and session.streaming_ready and not session.is_closing:
             try:
-                logger.info(f"[{session.session_id}] Sending end_of_turn signal to Gemini")
-                await session.gemini_session.send(input=None, end_of_turn=True)
+                logger.info(f"[{session.session_id}] Sending audio_stream_end signal to Gemini")
+                await session.gemini_session.send_realtime_input(audio_stream_end=True)
             except Exception as e:
-                logger.warning(f"[{session.session_id}] Failed to send end_of_turn: {e}")
+                logger.warning(f"[{session.session_id}] Failed to send audio_stream_end: {e}")
 
     async def _receive_loop(self, session: ClientSession, gemini_session):
         """Receive responses from Gemini and forward to client"""

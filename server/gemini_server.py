@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 
 import numpy as np
+import wave
 from scipy import signal
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -155,6 +156,31 @@ def base64_to_pcm16(audio_base64: str) -> bytes:
     return base64.b64decode(audio_base64)
 
 
+# Debug: counter for audio files
+_audio_file_counter = 0
+
+def save_debug_audio(audio_data: bytes, session_id: str, direction: str):
+    """Save audio to WAV file for debugging"""
+    global _audio_file_counter
+    _audio_file_counter += 1
+
+    # Create logs directory if not exists
+    os.makedirs("/app/logs", exist_ok=True)
+
+    filename = f"/app/logs/debug_{session_id}_{direction}_{_audio_file_counter}.wav"
+
+    try:
+        with wave.open(filename, 'wb') as wav_file:
+            wav_file.setnchannels(1)  # mono
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(16000)  # 16kHz
+            wav_file.writeframes(audio_data)
+
+        logger.info(f"[{session_id}] DEBUG: Saved audio to {filename}")
+    except Exception as e:
+        logger.warning(f"[{session_id}] Failed to save debug audio: {e}")
+
+
 # =============================================================================
 # Gemini Translation Server
 # =============================================================================
@@ -237,6 +263,9 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         start_time = time.time()
 
         logger.info(f"[{session.session_id}] Sending {len(audio_data)} bytes to Gemini ({session.source_lang} -> {session.target_lang})")
+
+        # DEBUG: Save audio to file for analysis
+        save_debug_audio(audio_data, session.session_id, f"{session.source_lang}_to_{session.target_lang}")
 
         # Collect response
         translated_audio = bytearray()

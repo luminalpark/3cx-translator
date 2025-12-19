@@ -84,8 +84,22 @@ public class AudioBridge : IDisposable
     public void Initialize()
     {
         var enumerator = new MMDeviceEnumerator();
-        
+
         _logger.LogInformation("=== Initializing Bidirectional Audio Bridge ===");
+
+        // Log all available audio devices for debugging
+        _logger.LogInformation("=== Available Audio Devices ===");
+        _logger.LogInformation("CAPTURE (Microphone) devices:");
+        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        {
+            _logger.LogInformation("  [CAPTURE] {Name}", device.FriendlyName);
+        }
+        _logger.LogInformation("RENDER (Speaker/Output) devices:");
+        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+        {
+            _logger.LogInformation("  [RENDER] {Name}", device.FriendlyName);
+        }
+        _logger.LogInformation("=== End Audio Devices ===");
         
         // ============================================================
         // INBOUND PATH: Remote Party → Operator

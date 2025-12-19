@@ -457,9 +457,10 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         # NOTE: Native audio models automatically choose the output language
         # based on the system instruction - language_code is not supported
         #
-        # MANUAL VAD: We disable automatic voice activity detection and control
-        # turn boundaries manually with activity_start/activity_end signals.
-        # This gives precise control for file playback and call simulation.
+        # AUTOMATIC VAD with tuned parameters for real-time streaming translation.
+        # - High sensitivity for speech detection
+        # - Short silence duration to detect natural pauses quickly
+        # - This enables real-time translation during audio playback
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -474,7 +475,11 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=True
+                    disabled=False,
+                    start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    prefix_padding_ms=300,
+                    silence_duration_ms=500  # Detect pauses after 500ms of silence
                 )
             )
         )
@@ -707,9 +712,15 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                         "type": "turn_complete"
                                     })
 
-                                    # With Manual VAD: Client will send activity_start/activity_end
-                                    # for the next turn. No automatic audio_stream_end needed.
-                                    logger.info(f"[{session.session_id}] Ready for next turn (Manual VAD)")
+                                    # With Automatic VAD: Send audioStreamEnd to flush any cached audio
+                                    # This ensures Gemini processes remaining audio and starts new turn detection
+                                    logger.info(f"[{session.session_id}] Sending audioStreamEnd to flush cache for next turn...")
+                                    try:
+                                        await gemini_session.send_realtime_input(audio_stream_end=True)
+                                    except Exception as e:
+                                        logger.warning(f"[{session.session_id}] Failed to send audioStreamEnd: {e}")
+
+                                    logger.info(f"[{session.session_id}] Ready for next turn (Automatic VAD)")
                                     break  # Exit inner loop to call receive() again
 
                         except Exception as e:

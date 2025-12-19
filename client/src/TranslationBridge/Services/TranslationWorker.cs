@@ -393,7 +393,7 @@ public class TranslationWorker : BackgroundService
         });
     }
 
-    private void OnSimulateCallRequested(string filePath)
+    private async void OnSimulateCallRequested(string filePath)
     {
         _logger.LogInformation("═══════════════════════════════════════════════════════════");
         _logger.LogInformation("  📞 Simulazione Chiamata avviata");
@@ -425,20 +425,20 @@ public class TranslationWorker : BackgroundService
                 // Disable simulation mode
                 _isSimulating = false;
 
-                // Send end_of_turn ONLY at the end of the audio file
-                // This signals Gemini to process any remaining buffered audio
-                _logger.LogInformation("  📤 Sending end_of_turn to flush remaining audio...");
+                // Send activity_end to signal end of speech (Manual VAD)
+                // This triggers Gemini to generate the translation response
+                _logger.LogInformation("  📤 Sending activity_end to trigger translation (Manual VAD)...");
                 try
                 {
                     if (_inboundClient != null && _inboundClient.IsStreamingMode)
                     {
-                        await _inboundClient.SendEndOfTurnAsync();
-                        _logger.LogInformation("  ✓ end_of_turn sent");
+                        await _inboundClient.SendActivityEndAsync();
+                        _logger.LogInformation("  ✓ activity_end sent");
                     }
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to send end_of_turn");
+                    _logger.LogWarning(ex, "Failed to send activity_end");
                 }
 
                 _trayService?.UpdateSimulationState(false, null);
@@ -453,6 +453,14 @@ public class TranslationWorker : BackgroundService
             // Load and start
             if (_fileAudioInjector.LoadFile(filePath))
             {
+                // Send activity_start BEFORE sending audio (Manual VAD)
+                if (_inboundClient != null && _inboundClient.IsStreamingMode)
+                {
+                    _logger.LogInformation("  📤 Sending activity_start (Manual VAD)...");
+                    await _inboundClient.SendActivityStartAsync();
+                    await Task.Delay(100); // Small delay to ensure signal is processed
+                }
+
                 _fileAudioInjector.Start();
                 _logger.LogInformation("Audio injection started. Duration: {Duration:mm\\:ss}",
                     _fileAudioInjector.Duration);

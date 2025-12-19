@@ -266,6 +266,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
         # DEBUG: Save audio to file for analysis
         save_debug_audio(audio_data, session.session_id, f"{session.source_lang}_to_{session.target_lang}")
+        
 
         # Collect response
         translated_audio = bytearray()
@@ -275,10 +276,12 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
         try:
             # Use async context manager for Gemini Live session
+            logger.info(f"[{session.session_id}] Opening Gemini Live session...")
             async with client.aio.live.connect(
                 model=self.config.gemini_model,
                 config=config
             ) as gemini_session:
+                logger.info(f"[{session.session_id}] Gemini session opened, sending audio...")
 
                 # Send audio to Gemini (raw bytes)
                 await gemini_session.send(
@@ -292,9 +295,13 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                     ),
                     end_of_turn=True
                 )
+                logger.info(f"[{session.session_id}] Audio sent, waiting for response...")
 
                 # Receive response
+                response_count = 0
                 async for response in gemini_session.receive():
+                    response_count += 1
+                    logger.info(f"[{session.session_id}] Response #{response_count}: {type(response).__name__}")
                     # Handle server content
                     if hasattr(response, 'server_content') and response.server_content:
                         content = response.server_content

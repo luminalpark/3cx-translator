@@ -182,10 +182,15 @@ public class StreamingDiagnostic : IDisposable
             const int chunkDelayMs = 25; // Real-time simulation
 
             Log("");
-            Log($"=== SENDING AUDIO ===");
+            Log($"=== SENDING AUDIO (Manual VAD) ===");
             Log($"Chunk size: {chunkSize} bytes ({chunkDelayMs}ms)");
             Log($"Total chunks: {(inputAudio.Length + chunkSize - 1) / chunkSize}");
             Log("");
+
+            // Signal start of speech (Manual VAD)
+            Log("Signaling activity_start (Manual VAD)...");
+            await _client.SendActivityStartAsync(ct);
+            await Task.Delay(100, ct); // Small delay to ensure signal is processed
 
             for (int offset = 0; offset < inputAudio.Length && !ct.IsCancellationRequested; offset += chunkSize)
             {
@@ -213,9 +218,9 @@ public class StreamingDiagnostic : IDisposable
             Log($"Sent {_audioChunksSent} chunks, {_totalBytesSent} bytes total");
             Log("");
 
-            // Signal end of turn to Gemini - this triggers translation response
-            Log("Signaling end_of_turn to Gemini (triggering translation)...");
-            await _client.SendEndOfTurnAsync(ct);
+            // Signal end of speech (Manual VAD) - this triggers translation response
+            Log("Signaling activity_end to Gemini (Manual VAD - triggering translation)...");
+            await _client.SendActivityEndAsync(ct);
 
             // Wait for remaining translations to arrive
             Log("Waiting for translation response (15 seconds)...");

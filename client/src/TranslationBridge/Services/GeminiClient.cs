@@ -286,8 +286,8 @@ public class GeminiClient : IAsyncDisposable
 
     /// <summary>
     /// Signal end of turn to Gemini in streaming mode.
+    /// NOTE: With Manual VAD enabled on server, use SendActivityEndAsync instead.
     /// This tells Gemini "I'm done speaking, now translate and respond".
-    /// Required when sending continuous audio (like from a file) without natural pauses.
     /// </summary>
     public async Task SendEndOfTurnAsync(CancellationToken cancellationToken = default)
     {
@@ -306,6 +306,53 @@ public class GeminiClient : IAsyncDisposable
         var request = new { type = "end_of_turn" };
         await SendJsonAsync(request, cancellationToken);
         _logger.LogInformation("Sent end_of_turn signal to Gemini");
+    }
+
+    /// <summary>
+    /// Signal start of user speech (Manual VAD).
+    /// Call this before sending audio chunks when the server has Manual VAD enabled.
+    /// </summary>
+    public async Task SendActivityStartAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected)
+        {
+            _logger.LogWarning("Cannot send activity_start: not connected");
+            return;
+        }
+
+        if (!IsStreamingMode)
+        {
+            _logger.LogWarning("Cannot send activity_start: not in streaming mode");
+            return;
+        }
+
+        var request = new { type = "activity_start" };
+        await SendJsonAsync(request, cancellationToken);
+        _logger.LogInformation("Sent activity_start signal to Gemini (Manual VAD)");
+    }
+
+    /// <summary>
+    /// Signal end of user speech (Manual VAD).
+    /// Call this after sending audio chunks to trigger translation response.
+    /// This is the preferred method when server has Manual VAD enabled.
+    /// </summary>
+    public async Task SendActivityEndAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected)
+        {
+            _logger.LogWarning("Cannot send activity_end: not connected");
+            return;
+        }
+
+        if (!IsStreamingMode)
+        {
+            _logger.LogWarning("Cannot send activity_end: not in streaming mode");
+            return;
+        }
+
+        var request = new { type = "activity_end" };
+        await SendJsonAsync(request, cancellationToken);
+        _logger.LogInformation("Sent activity_end signal to Gemini (Manual VAD) - triggering translation");
     }
 
     public async Task ClearBufferAsync(CancellationToken cancellationToken = default)
@@ -453,6 +500,14 @@ public class GeminiClient : IAsyncDisposable
 
                 case "end_of_turn_sent":
                     _logger.LogDebug("End of turn acknowledged by server");
+                    break;
+
+                case "activity_start_sent":
+                    _logger.LogDebug("Activity start acknowledged by server (Manual VAD)");
+                    break;
+
+                case "activity_end_sent":
+                    _logger.LogDebug("Activity end acknowledged by server (Manual VAD)");
                     break;
 
                 case "result":

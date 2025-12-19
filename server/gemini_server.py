@@ -456,6 +456,10 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         # Configure Gemini Live session
         # NOTE: Native audio models automatically choose the output language
         # based on the system instruction - language_code is not supported
+        #
+        # MANUAL VAD: We disable automatic voice activity detection and control
+        # turn boundaries manually with activity_start/activity_end signals.
+        # This gives precise control for file playback and call simulation.
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -467,7 +471,12 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             ),
             system_instruction=system_instruction,
             input_audio_transcription=types.AudioTranscriptionConfig(),
-            output_audio_transcription=types.AudioTranscriptionConfig()
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+            realtime_input_config=types.RealtimeInputConfig(
+                automatic_activity_detection=types.AutomaticActivityDetection(
+                    disabled=True
+                )
+            )
         )
 
         try:
@@ -510,12 +519,6 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
                     if audio_data is None:  # Poison pill
                         break
-
-                    # Handle special markers
-                    if audio_data == "END_OF_TURN":
-                        logger.info(f"[{session.session_id}] Sending audio_stream_end to Gemini (from queue)")
-                        await gemini_session.send_realtime_input(audio_stream_end=True)
-                        continue
 
                     # Send audio to Gemini
                     await gemini_session.send_realtime_input(
@@ -560,16 +563,51 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
     async def send_end_of_turn(self, session: ClientSession):
         """Signal end of audio stream to Gemini.
 
-        NOTE: Per best practices, end_of_turn should NOT be sent during normal streaming.
-        Gemini's internal VAD handles turn detection automatically.
-        This method is kept for backward compatibility but should rarely be used.
+        NOTE: With Manual VAD enabled, use send_activity_end() instead.
+        This method is kept for backward compatibility but should not be used
+        when Manual VAD is active.
         """
         if session.gemini_session and session.streaming_ready and not session.is_closing:
             try:
-                logger.info(f"[{session.session_id}] Sending audio_stream_end signal to Gemini (should be rare)")
+                logger.info(f"[{session.session_id}] Sending audio_stream_end signal to Gemini")
                 await session.gemini_session.send_realtime_input(audio_stream_end=True)
             except Exception as e:
                 logger.warning(f"[{session.session_id}] Failed to send audio_stream_end: {e}")
+
+    async def send_activity_start(self, session: ClientSession):
+        """Signal start of user speech (Manual VAD).
+
+        Call this before sending audio chunks to indicate the user started speaking.
+        Required when automatic_activity_detection is disabled.
+        """
+        from google.genai import types
+
+        if session.gemini_session and session.streaming_ready and not session.is_closing:
+            try:
+                logger.info(f"[{session.session_id}] Sending activity_start to Gemini (Manual VAD)")
+                await session.gemini_session.send_realtime_input(
+                    activity_start=types.ActivityStart()
+                )
+            except Exception as e:
+                logger.warning(f"[{session.session_id}] Failed to send activity_start: {e}")
+
+    async def send_activity_end(self, session: ClientSession):
+        """Signal end of user speech (Manual VAD).
+
+        Call this after sending audio chunks to indicate the user stopped speaking.
+        This triggers Gemini to generate the translation response.
+        Required when automatic_activity_detection is disabled.
+        """
+        from google.genai import types
+
+        if session.gemini_session and session.streaming_ready and not session.is_closing:
+            try:
+                logger.info(f"[{session.session_id}] Sending activity_end to Gemini (Manual VAD) - triggering response")
+                await session.gemini_session.send_realtime_input(
+                    activity_end=types.ActivityEnd()
+                )
+            except Exception as e:
+                logger.warning(f"[{session.session_id}] Failed to send activity_end: {e}")
 
     async def _receive_loop(self, session: ClientSession, gemini_session):
         """Receive responses from Gemini and forward to client"""
@@ -669,18 +707,9 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                         "type": "turn_complete"
                                     })
 
-                                    # Send audio_stream_end through the queue to ensure proper sequencing
-                                    # This avoids race conditions between audio data and the signal
-                                    logger.info(f"[{session.session_id}] Queueing audio_stream_end signal...")
-                                    if session.audio_queue:
-                                        try:
-                                            # Use a special marker to signal end_of_turn
-                                            session.audio_queue.put_nowait("END_OF_TURN")
-                                        except asyncio.QueueFull:
-                                            logger.warning(f"[{session.session_id}] Queue full, sending end_of_turn directly")
-                                            await gemini_session.send_realtime_input(audio_stream_end=True)
-
-                                    logger.info(f"[{session.session_id}] Waiting for next turn...")
+                                    # With Manual VAD: Client will send activity_start/activity_end
+                                    # for the next turn. No automatic audio_stream_end needed.
+                                    logger.info(f"[{session.session_id}] Ready for next turn (Manual VAD)")
                                     break  # Exit inner loop to call receive() again
 
                         except Exception as e:
@@ -1073,11 +1102,41 @@ async def handle_json_message(
 
     elif msg_type == "end_of_turn":
         # Signal to Gemini that the user has finished speaking
-        # This triggers Gemini to generate a translation response
+        # NOTE: With Manual VAD, use activity_end instead
         if session.streaming_enabled and session.streaming_ready:
             await server.send_end_of_turn(session)
             await websocket.send_json({
                 "type": "end_of_turn_sent"
+            })
+        else:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Streaming mode not active",
+                "code": "NOT_STREAMING"
+            })
+
+    elif msg_type == "activity_start":
+        # Signal start of user speech (Manual VAD)
+        # Call this before sending audio chunks
+        if session.streaming_enabled and session.streaming_ready:
+            await server.send_activity_start(session)
+            await websocket.send_json({
+                "type": "activity_start_sent"
+            })
+        else:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Streaming mode not active",
+                "code": "NOT_STREAMING"
+            })
+
+    elif msg_type == "activity_end":
+        # Signal end of user speech (Manual VAD)
+        # Call this after sending audio chunks to trigger translation
+        if session.streaming_enabled and session.streaming_ready:
+            await server.send_activity_end(session)
+            await websocket.send_json({
+                "type": "activity_end_sent"
             })
         else:
             await websocket.send_json({

@@ -88,8 +88,20 @@ public class GeminiClient : IAsyncDisposable
         _webSocket?.Dispose();
         _webSocket = new ClientWebSocket();
 
-        var uri = new Uri(_config.ServerUrl);
-        _logger.LogInformation("Connecting to Gemini server at {Url}...", uri);
+        // Build URI with API key if configured
+        var baseUri = new Uri(_config.ServerUrl);
+        Uri uri;
+        if (!string.IsNullOrEmpty(_config.ApiKey))
+        {
+            var separator = string.IsNullOrEmpty(baseUri.Query) ? "?" : "&";
+            uri = new Uri($"{baseUri}{separator}key={Uri.EscapeDataString(_config.ApiKey)}");
+            _logger.LogInformation("Connecting to Gemini server at {Url} (with API key)...", baseUri);
+        }
+        else
+        {
+            uri = baseUri;
+            _logger.LogInformation("Connecting to Gemini server at {Url}...", uri);
+        }
 
         try
         {

@@ -28,8 +28,9 @@ from typing import Optional, Dict, Any, List
 import numpy as np
 import wave
 from scipy import signal
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.websockets import WebSocketClose
 from dotenv import load_dotenv
 import uvicorn
 
@@ -64,6 +65,8 @@ class ServerConfig:
     max_audio_duration_sec: int = 30
     input_sample_rate: int = 16000
     output_sample_rate: int = 16000
+    # Client API key for authentication (optional, but recommended for production)
+    client_api_key: str = ""
 
     @classmethod
     def from_env(cls) -> "ServerConfig":
@@ -79,6 +82,7 @@ class ServerConfig:
             server_port=int(os.environ.get("SERVER_PORT", "8001")),
             default_source_lang=os.environ.get("DEFAULT_SOURCE_LANG", "auto"),
             default_target_lang=os.environ.get("DEFAULT_TARGET_LANG", "it"),
+            client_api_key=os.environ.get("CLIENT_API_KEY", ""),
         )
 
 
@@ -760,9 +764,29 @@ async def get_languages():
     }
 
 
+def verify_api_key(api_key: str) -> bool:
+    """Verify client API key if configured"""
+    if not server or not server.config.client_api_key:
+        return True  # No API key configured, allow all
+    return api_key == server.config.client_api_key
+
+
 @app.websocket("/ws/translate")
-async def websocket_translate(websocket: WebSocket):
-    """Main WebSocket endpoint for real-time translation"""
+async def websocket_translate(
+    websocket: WebSocket,
+    api_key: str = Query(default="", alias="key")
+):
+    """Main WebSocket endpoint for real-time translation
+
+    Query params:
+        key: API key for authentication (required if CLIENT_API_KEY is set)
+    """
+    # Check API key before accepting connection
+    if not verify_api_key(api_key):
+        logger.warning(f"Rejected connection: invalid API key from {websocket.client}")
+        await websocket.close(code=4001, reason="Invalid API key")
+        return
+
     await websocket.accept()
 
     session_id = str(uuid.uuid4())[:8]
@@ -1073,6 +1097,10 @@ if __name__ == "__main__":
     logger.info(f"Voice: {config.gemini_voice}")
     logger.info(f"Languages: {', '.join(SUPPORTED_LANGUAGES)}")
     logger.info(f"Default: {config.default_source_lang} -> {config.default_target_lang}")
+    if config.client_api_key:
+        logger.info(f"API Key: ENABLED (key=***{config.client_api_key[-4:]})")
+    else:
+        logger.warning("API Key: DISABLED - set CLIENT_API_KEY env var for production!")
     logger.info("=" * 60)
 
     uvicorn.run(

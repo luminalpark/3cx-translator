@@ -57,7 +57,7 @@
 
         .config {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
             gap: 15px;
             margin-bottom: 15px;
         }
@@ -158,6 +158,10 @@
             <div>
                 <label>Server URL</label>
                 <input type="text" id="serverUrl" value="ws://3cxtranslate.luminalpark.com/ws/translate">
+            </div>
+            <div>
+                <label>API Key (optional)</label>
+                <input type="password" id="apiKey" placeholder="Leave empty if not required">
             </div>
             <div>
                 <label>Target Language</label>
@@ -265,8 +269,17 @@
                 audioContext = new AudioContext({ sampleRate: 16000 });
 
                 // Connect to WebSocket
-                const serverUrl = document.getElementById('serverUrl').value;
-                log(`Connecting to ${serverUrl}...`);
+                let serverUrl = document.getElementById('serverUrl').value;
+                const apiKey = document.getElementById('apiKey').value;
+
+                // Add API key if provided
+                if (apiKey) {
+                    const separator = serverUrl.includes('?') ? '&' : '?';
+                    serverUrl = `${serverUrl}${separator}key=${encodeURIComponent(apiKey)}`;
+                    log(`Connecting to ${document.getElementById('serverUrl').value} (with API key)...`);
+                } else {
+                    log(`Connecting to ${serverUrl}...`);
+                }
 
                 ws = new WebSocket(serverUrl);
                 ws.binaryType = 'arraybuffer';

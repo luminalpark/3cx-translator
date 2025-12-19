@@ -11,6 +11,12 @@ public class BridgeConfig
     public string ServerUrl { get; set; } = "ws://3cxtranslate.luminalpark.com/ws/translate";
 
     /// <summary>
+    /// API key for server authentication.
+    /// Required if the server has CLIENT_API_KEY configured.
+    /// </summary>
+    public string ApiKey { get; set; } = "";
+
+    /// <summary>
     /// Audio device settings for bidirectional translation
     /// </summary>
     public AudioDeviceConfig AudioDevices { get; set; } = new();

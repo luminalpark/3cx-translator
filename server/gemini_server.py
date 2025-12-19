@@ -712,15 +712,13 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                         "type": "turn_complete"
                                     })
 
-                                    # With Automatic VAD: Send audioStreamEnd to flush any cached audio
-                                    # This ensures Gemini processes remaining audio and starts new turn detection
-                                    logger.info(f"[{session.session_id}] Sending audioStreamEnd to flush cache for next turn...")
-                                    try:
-                                        await gemini_session.send_realtime_input(audio_stream_end=True)
-                                    except Exception as e:
-                                        logger.warning(f"[{session.session_id}] Failed to send audioStreamEnd: {e}")
+                                    # With Automatic VAD: Do NOT send audioStreamEnd after turn_complete
+                                    # - audioStreamEnd is meant for when microphone is paused for >1 second
+                                    # - For continuous audio (like file playback), Gemini's VAD continues
+                                    #   to detect speech automatically without any signal
+                                    # - Sending audioStreamEnd while audio is still streaming confuses Gemini
 
-                                    logger.info(f"[{session.session_id}] Ready for next turn (Automatic VAD)")
+                                    logger.info(f"[{session.session_id}] Ready for next turn (Automatic VAD - continuous audio)")
                                     break  # Exit inner loop to call receive() again
 
                         except Exception as e:

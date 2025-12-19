@@ -393,7 +393,7 @@ public class TranslationWorker : BackgroundService
         });
     }
 
-    private async void OnSimulateCallRequested(string filePath)
+    private void OnSimulateCallRequested(string filePath)
     {
         _logger.LogInformation("═══════════════════════════════════════════════════════════");
         _logger.LogInformation("  📞 Simulazione Chiamata avviata");
@@ -416,7 +416,7 @@ public class TranslationWorker : BackgroundService
             _simulationChunksSent = 0;
 
             // Subscribe to events
-            _fileAudioInjector.OnPlaybackComplete += async () =>
+            _fileAudioInjector.OnPlaybackComplete += () =>
             {
                 _logger.LogInformation("═══════════════════════════════════════════════════════════");
                 _logger.LogInformation("  📞 Simulazione completata - Chunks totali: {Count}", _simulationChunksSent);
@@ -425,21 +425,9 @@ public class TranslationWorker : BackgroundService
                 // Disable simulation mode
                 _isSimulating = false;
 
-                // Send activity_end to signal end of speech (Manual VAD)
-                // This triggers Gemini to generate the translation response
-                _logger.LogInformation("  📤 Sending activity_end to trigger translation (Manual VAD)...");
-                try
-                {
-                    if (_inboundClient != null && _inboundClient.IsStreamingMode)
-                    {
-                        await _inboundClient.SendActivityEndAsync();
-                        _logger.LogInformation("  ✓ activity_end sent");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to send activity_end");
-                }
+                // With Automatic VAD, Gemini detects speech end automatically
+                // No explicit signal needed - Gemini's VAD handles turn detection
+                _logger.LogInformation("  ℹ️ Waiting for Gemini to complete translation (Automatic VAD)...");
 
                 _trayService?.UpdateSimulationState(false, null);
             };
@@ -453,14 +441,8 @@ public class TranslationWorker : BackgroundService
             // Load and start
             if (_fileAudioInjector.LoadFile(filePath))
             {
-                // Send activity_start BEFORE sending audio (Manual VAD)
-                if (_inboundClient != null && _inboundClient.IsStreamingMode)
-                {
-                    _logger.LogInformation("  📤 Sending activity_start (Manual VAD)...");
-                    await _inboundClient.SendActivityStartAsync();
-                    await Task.Delay(100); // Small delay to ensure signal is processed
-                }
-
+                // With Automatic VAD, Gemini detects speech automatically
+                // No need to send activity_start - just start sending audio
                 _fileAudioInjector.Start();
                 _logger.LogInformation("Audio injection started. Duration: {Duration:mm\\:ss}",
                     _fileAudioInjector.Duration);

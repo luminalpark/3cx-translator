@@ -571,8 +571,11 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
         try:
             # Loop to handle multiple turns - receive() completes after each turn
+            outer_loop_count = 0
             while not session.is_closing:
+                outer_loop_count += 1
                 turn_count = 0
+                logger.info(f"[{session.session_id}] Starting receive() iteration #{outer_loop_count}")
                 try:
                     async for response in gemini_session.receive():
                         if session.is_closing:
@@ -659,11 +662,15 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                     await session.websocket.send_json({
                                         "type": "turn_complete"
                                     })
-                                    # No buffering needed - audio is sent continuously (full duplex)
+                                    # After turn completes, log and continue listening for next turn
+                                    logger.info(f"[{session.session_id}] Waiting for next turn...")
                                     break  # Exit inner loop to call receive() again
 
                         except Exception as e:
                             logger.warning(f"[{session.session_id}] Error forwarding response: {e}")
+
+                    # After inner for-loop completes (turn_complete), log before calling receive() again
+                    logger.info(f"[{session.session_id}] Calling receive() for next turn")
 
                 except Exception as e:
                     error_str = str(e).lower()

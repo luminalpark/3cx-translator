@@ -663,16 +663,15 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                         "type": "turn_complete"
                                     })
 
-                                    # After turn completes, send audio_stream_end to force Gemini to
-                                    # process any buffered audio and be ready for new input
-                                    logger.info(f"[{session.session_id}] Sending audio_stream_end to reset VAD state")
-                                    try:
-                                        await gemini_session.send_realtime_input(audio_stream_end=True)
-                                    except Exception as e:
-                                        logger.warning(f"[{session.session_id}] Failed to send audio_stream_end after turn: {e}")
+                                    # DON'T send audio_stream_end here - it corrupts translations
+                                    # Instead, let the audio continue flowing and Gemini will
+                                    # naturally detect new speech via its internal VAD
+                                    # The audio_stream_end should only be sent when the user
+                                    # actually stops speaking (handled by client silence detection)
 
-                                    logger.info(f"[{session.session_id}] Waiting for next turn...")
-                                    break  # Exit inner loop to call receive() again
+                                    logger.info(f"[{session.session_id}] Waiting for next turn (no audio_stream_end)...")
+                                    # Don't break - stay in receive loop to continue getting responses
+                                    # break  # Exit inner loop to call receive() again
 
                         except Exception as e:
                             logger.warning(f"[{session.session_id}] Error forwarding response: {e}")

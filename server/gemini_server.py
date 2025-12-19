@@ -266,10 +266,9 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             session.target_lang
         )
 
-        # Get target language BCP-47 code
-        target_bcp47 = GEMINI_LANG_CODES.get(session.target_lang.lower(), session.target_lang)
-
         # Configure Gemini Live session
+        # NOTE: Native audio models automatically choose the output language
+        # based on the system instruction - language_code is not supported
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -277,8 +276,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
                         voice_name=self.config.gemini_voice
                     )
-                ),
-                language_code=target_bcp47
+                )
             ),
             system_instruction=system_instruction,
             input_audio_transcription=types.AudioTranscriptionConfig(),
@@ -448,10 +446,9 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             session.target_lang
         )
 
-        # Get target language BCP-47 code
-        target_bcp47 = GEMINI_LANG_CODES.get(session.target_lang.lower(), session.target_lang)
-
         # Configure Gemini Live session
+        # NOTE: Native audio models automatically choose the output language
+        # based on the system instruction - language_code is not supported
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
@@ -459,8 +456,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
                         voice_name=self.config.gemini_voice
                     )
-                ),
-                language_code=target_bcp47
+                )
             ),
             system_instruction=system_instruction,
             input_audio_transcription=types.AudioTranscriptionConfig(),

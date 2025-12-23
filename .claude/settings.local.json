@@ -28,7 +28,8 @@
       "Bash(timeout 30 docker logs:*)",
       "Bash(timeout 60 docker logs:*)",
       "Bash(git reset:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(powershell -Command:*)"
     ]
   }
 }

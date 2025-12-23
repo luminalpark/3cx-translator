@@ -130,23 +130,81 @@ public class LanguageConfig
 
 public class VadConfig
 {
+    // ============================================================
+    // Thresholds separati (ottimizzati per VoIP/telefonia)
+    // ============================================================
+
     /// <summary>
-    /// Energy threshold for voice detection (0.0 - 1.0)
+    /// RMS threshold to detect speech start (0.0 - 1.0)
+    /// Lower for VoIP audio quality
     /// </summary>
-    public float Threshold { get; set; } = 0.01f;
-    
+    public float SpeechThreshold { get; set; } = 0.012f;
+
+    /// <summary>
+    /// RMS threshold for silence detection (0.0 - 1.0)
+    /// Lower than speech threshold for telephony
+    /// </summary>
+    public float SilenceThreshold { get; set; } = 0.006f;
+
+    /// <summary>
+    /// RMS threshold for auto-restart after turn_complete (0.0 - 1.0)
+    /// Between silence and speech thresholds
+    /// </summary>
+    public float AutoRestartThreshold { get; set; } = 0.009f;
+
+    // ============================================================
+    // Timing
+    // ============================================================
+
     /// <summary>
     /// Minimum silence duration (ms) to trigger translation
     /// </summary>
-    public int SilenceDurationMs { get; set; } = 600;
-    
+    public int SilenceDurationMs { get; set; } = 350;
+
     /// <summary>
-    /// Maximum speech duration (ms) before forced translation
+    /// Minimum turn duration (ms) before allowing silence-based closure
+    /// Prevents "nervous" segmentation
+    /// </summary>
+    public int MinTurnDurationMs { get; set; } = 900;
+
+    /// <summary>
+    /// Maximum turn duration (ms) - safety limit, not fixed timer
+    /// Only closes if also near-silence (RMS < SilenceThreshold)
+    /// </summary>
+    public int MaxTurnMs { get; set; } = 5000;
+
+    // ============================================================
+    // Buffer e Overlap
+    // ============================================================
+
+    /// <summary>
+    /// Overlap duration (ms) between turns for lexical continuity
+    /// Last N ms of audio saved and sent at next turn start
+    /// </summary>
+    public int OverlapMs { get; set; } = 250;
+
+    /// <summary>
+    /// Maximum bytes to buffer during WAIT_COMPLETE state
+    /// ~2s of PCM16 mono @16kHz = 64KB
+    /// </summary>
+    public int PendingMaxBytes { get; set; } = 64000;
+
+    // ============================================================
+    // Legacy (mantieni per retrocompatibilità appsettings.json)
+    // ============================================================
+
+    /// <summary>
+    /// [DEPRECATED] Use SpeechThreshold instead
+    /// </summary>
+    public float Threshold { get; set; } = 0.01f;
+
+    /// <summary>
+    /// [DEPRECATED] Use MaxTurnMs instead
     /// </summary>
     public int MaxSpeechDurationMs { get; set; } = 10000;
-    
+
     /// <summary>
-    /// Minimum speech duration (ms) to consider valid
+    /// [DEPRECATED] Use MinTurnDurationMs instead
     /// </summary>
     public int MinSpeechDurationMs { get; set; } = 300;
 }

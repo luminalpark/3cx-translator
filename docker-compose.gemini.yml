@@ -32,10 +32,8 @@ services:
       - SERVER_HOST=0.0.0.0
 
       # Vertex AI Gemini model configuration
-      # Available models for Live API:
-      # - gemini-2.5-flash-live-preview-04-09 (recommended)
-      # - gemini-live-2.5-flash (latest)
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-live-preview-04-09}
+      # GA model for Live API with native audio (Dec 2025)
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-live-2.5-flash-native-audio}
 
       # Voice configuration
       # Available voices: Aoede, Charon, Fenrir, Kore, Puck

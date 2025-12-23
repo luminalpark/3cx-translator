@@ -61,6 +61,12 @@ public class GeminiClient : IAsyncDisposable
     /// </summary>
     public event Action<bool>? OnStreamingModeChanged;
 
+    /// <summary>
+    /// Fired when turn_complete is received from server (Manual VAD)
+    /// Used for auto-restart logic in rolling turns
+    /// </summary>
+    public event Action? OnTurnComplete;
+
     public bool IsConnected => _isConnected && _webSocket?.State == WebSocketState.Open;
 
     /// <summary>
@@ -496,6 +502,7 @@ public class GeminiClient : IAsyncDisposable
 
                 case "turn_complete":
                     _logger.LogDebug("Turn complete");
+                    OnTurnComplete?.Invoke();
                     break;
 
                 case "end_of_turn_sent":

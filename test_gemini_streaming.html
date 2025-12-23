@@ -140,6 +140,139 @@
             color: #fff;
             animation: pulse 0.5s infinite;
         }
+
+        /* VAD Settings Panel */
+        .vad-panel {
+            margin-top: 15px;
+            border-top: 1px solid #333;
+            padding-top: 15px;
+        }
+        .vad-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+        }
+        .vad-header h4 {
+            margin: 0;
+            color: #00d4ff;
+            font-size: 14px;
+        }
+        .vad-toggle {
+            color: #888;
+            font-size: 12px;
+        }
+        .vad-content {
+            display: none;
+            margin-top: 15px;
+        }
+        .vad-content.expanded { display: block; }
+        .vad-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .vad-item {
+            background: #0f0f23;
+            border-radius: 6px;
+            padding: 12px;
+        }
+        .vad-item label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+        .vad-item label span.value {
+            color: #00d4ff;
+            font-weight: bold;
+        }
+        .vad-item input[type="range"] {
+            width: 100%;
+            -webkit-appearance: none;
+            height: 6px;
+            border-radius: 3px;
+            background: #333;
+            cursor: pointer;
+        }
+        .vad-item input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #00d4ff;
+            cursor: pointer;
+        }
+        .vad-item input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #00d4ff;
+            cursor: pointer;
+            border: none;
+        }
+        .vad-item .hint {
+            font-size: 10px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .vad-presets {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+        }
+        .vad-presets button {
+            padding: 8px 16px;
+            font-size: 12px;
+            background: #333;
+            color: #aaa;
+        }
+        .vad-presets button:hover {
+            background: #444;
+            color: #fff;
+        }
+        .rms-meter {
+            margin-top: 15px;
+            background: #0f0f23;
+            border-radius: 6px;
+            padding: 12px;
+        }
+        .rms-bar-container {
+            height: 20px;
+            background: #333;
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        .rms-bar {
+            height: 100%;
+            background: linear-gradient(to right, #00ff88, #ffd700, #ff6b6b);
+            width: 0%;
+            transition: width 0.05s;
+        }
+        .rms-markers {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+        }
+        .rms-marker {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: rgba(255,255,255,0.5);
+        }
+        .rms-value {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
     </style>
 </head>
 <body>
@@ -188,6 +321,126 @@
         <button id="startBtn" onclick="start()">Start Streaming</button>
         <button id="endTurnBtn" onclick="endTurn()" disabled style="display: none;">End Turn (Manual)</button>
         <button id="stopBtn" onclick="stop()" disabled class="stop">Stop</button>
+
+        <!-- VAD Settings Panel -->
+        <div class="vad-panel">
+            <div class="vad-header" onclick="toggleVadPanel()">
+                <h4>⚙️ VAD Settings (Voice Activity Detection)</h4>
+                <span class="vad-toggle" id="vadToggle">▶ Expand</span>
+            </div>
+            <div class="vad-content" id="vadContent">
+                <!-- RMS Meter -->
+                <div class="rms-meter">
+                    <label style="margin-bottom: 8px;">Live RMS Level</label>
+                    <div class="rms-bar-container">
+                        <div class="rms-bar" id="rmsBar"></div>
+                        <div class="rms-markers" id="rmsMarkers"></div>
+                    </div>
+                    <div class="rms-value">
+                        <span id="rmsValueText">RMS: 0.0000</span>
+                        <span id="turnStateText">State: IDLE</span>
+                    </div>
+                </div>
+
+                <div class="vad-grid">
+                    <!-- Speech Threshold -->
+                    <div class="vad-item">
+                        <label>
+                            <span>Speech Threshold</span>
+                            <span class="value" id="speechThresholdValue">0.012</span>
+                        </label>
+                        <input type="range" id="speechThreshold" min="0.001" max="0.05" step="0.001" value="0.012"
+                               oninput="updateVadParam('speechThreshold', this.value)">
+                        <div class="hint">RMS level to start a turn (green marker)</div>
+                    </div>
+
+                    <!-- Silence Threshold -->
+                    <div class="vad-item">
+                        <label>
+                            <span>Silence Threshold</span>
+                            <span class="value" id="silenceThresholdValue">0.006</span>
+                        </label>
+                        <input type="range" id="silenceThreshold" min="0.001" max="0.03" step="0.001" value="0.006"
+                               oninput="updateVadParam('silenceThreshold', this.value)">
+                        <div class="hint">RMS level considered silence (red marker)</div>
+                    </div>
+
+                    <!-- Auto-Restart Threshold -->
+                    <div class="vad-item">
+                        <label>
+                            <span>Auto-Restart Threshold</span>
+                            <span class="value" id="autoRestartThresholdValue">0.009</span>
+                        </label>
+                        <input type="range" id="autoRestartThreshold" min="0.001" max="0.03" step="0.001" value="0.009"
+                               oninput="updateVadParam('autoRestartThreshold', this.value)">
+                        <div class="hint">RMS level to auto-restart after turn_complete (yellow marker)</div>
+                    </div>
+
+                    <!-- Silence Duration -->
+                    <div class="vad-item">
+                        <label>
+                            <span>Silence Duration (ms)</span>
+                            <span class="value" id="silenceDurationValue">350</span>
+                        </label>
+                        <input type="range" id="silenceDuration" min="100" max="1000" step="50" value="350"
+                               oninput="updateVadParam('silenceDuration', this.value)">
+                        <div class="hint">Silence duration to trigger activity_end</div>
+                    </div>
+
+                    <!-- Min Turn Duration -->
+                    <div class="vad-item">
+                        <label>
+                            <span>Min Turn Duration (ms)</span>
+                            <span class="value" id="minTurnDurationValue">900</span>
+                        </label>
+                        <input type="range" id="minTurnDuration" min="300" max="2000" step="100" value="900"
+                               oninput="updateVadParam('minTurnDuration', this.value)">
+                        <div class="hint">Minimum turn length before allowing closure</div>
+                    </div>
+
+                    <!-- Max Turn Duration -->
+                    <div class="vad-item">
+                        <label>
+                            <span>Max Turn Duration (ms)</span>
+                            <span class="value" id="maxTurnDurationValue">5000</span>
+                        </label>
+                        <input type="range" id="maxTurnDuration" min="2000" max="15000" step="500" value="5000"
+                               oninput="updateVadParam('maxTurnDuration', this.value)">
+                        <div class="hint">Safety limit - closes only if also near-silence</div>
+                    </div>
+
+                    <!-- Overlap Duration -->
+                    <div class="vad-item">
+                        <label>
+                            <span>Overlap Duration (ms)</span>
+                            <span class="value" id="overlapDurationValue">250</span>
+                        </label>
+                        <input type="range" id="overlapDuration" min="0" max="500" step="50" value="250"
+                               oninput="updateVadParam('overlapDuration', this.value)">
+                        <div class="hint">Audio carried between turns for continuity</div>
+                    </div>
+
+                    <!-- Pending Buffer Max -->
+                    <div class="vad-item">
+                        <label>
+                            <span>Pending Buffer (KB)</span>
+                            <span class="value" id="pendingBufferValue">64</span>
+                        </label>
+                        <input type="range" id="pendingBuffer" min="16" max="128" step="8" value="64"
+                               oninput="updateVadParam('pendingBuffer', this.value)">
+                        <div class="hint">Max buffer during WAIT_COMPLETE (~2s = 64KB)</div>
+                    </div>
+                </div>
+
+                <!-- Presets -->
+                <div class="vad-presets">
+                    <button onclick="applyPreset('voip')">📞 VoIP/Telephony</button>
+                    <button onclick="applyPreset('quiet')">🤫 Quiet Environment</button>
+                    <button onclick="applyPreset('noisy')">🔊 Noisy Environment</button>
+                    <button onclick="applyPreset('fast')">⚡ Fast Response</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="panel">
@@ -222,19 +475,18 @@
         // WAIT_COMPLETE: sent activity_end, waiting for turn_complete, NOT sending audio
         let turnState = 'IDLE';
 
-        // VAD settings (ottimizzate per VoIP/telefonia)
-        const VAD_SPEECH_THRESHOLD = 0.012;   // RMS threshold to detect speech start (lower for VoIP)
-        const VAD_SILENCE_THRESHOLD = 0.006;  // RMS threshold for silence (lower for telephony)
-        const VAD_SILENCE_DURATION_MS = 350;  // Trigger translation after 350ms silence
-        const MIN_TURN_DURATION_MS = 900;     // Don't close turn if less than 900ms of speech
-        const MAX_TURN_MS = 5000;             // Safety limit at 5s, NOT a fixed timer
-        const AUTO_RESTART_THRESHOLD = 0.009; // RMS threshold for auto-restart (coerente con speech)
+        // VAD settings (ottimizzate per VoIP/telefonia) - now editable!
+        let VAD_SPEECH_THRESHOLD = 0.012;   // RMS threshold to detect speech start (lower for VoIP)
+        let VAD_SILENCE_THRESHOLD = 0.006;  // RMS threshold for silence (lower for telephony)
+        let VAD_SILENCE_DURATION_MS = 350;  // Trigger translation after 350ms silence
+        let MIN_TURN_DURATION_MS = 900;     // Don't close turn if less than 900ms of speech
+        let MAX_TURN_MS = 5000;             // Safety limit at 5s, NOT a fixed timer
+        let AUTO_RESTART_THRESHOLD = 0.009; // RMS threshold for auto-restart (coerente con speech)
 
-        // Buffer e Overlap settings
-        const OVERLAP_MS = 250;
-        const OVERLAP_SAMPLES = Math.floor(16000 * (OVERLAP_MS / 1000)); // 4000 samples
-        const OVERLAP_BYTES = OVERLAP_SAMPLES * 2; // PCM16 = 8000 bytes
-        const PENDING_MAX_BYTES = 16000 * 2 * 2; // ~2s di PCM16 mono @16kHz = 64KB
+        // Buffer e Overlap settings - now editable!
+        let OVERLAP_MS = 250;
+        let OVERLAP_BYTES = Math.floor(16000 * (OVERLAP_MS / 1000)) * 2; // Recalculated when OVERLAP_MS changes
+        let PENDING_MAX_BYTES = 64 * 1024; // ~2s di PCM16 mono @16kHz = 64KB
 
         let silenceStartTime = null;
         let speechStartTime = null;           // When the current turn started
@@ -248,7 +500,169 @@
             const oldState = turnState;
             turnState = newState;
             log(`Turn state: ${oldState} → ${newState}`, 'event');
+            // Update UI
+            const turnStateText = document.getElementById('turnStateText');
+            if (turnStateText) {
+                turnStateText.textContent = `State: ${newState}`;
+                turnStateText.style.color = newState === 'ACTIVE' ? '#00ff88' :
+                                            newState === 'WAIT_COMPLETE' ? '#ffd700' : '#888';
+            }
         }
+
+        // ============================================================
+        // VAD Settings Panel Functions
+        // ============================================================
+
+        function toggleVadPanel() {
+            const content = document.getElementById('vadContent');
+            const toggle = document.getElementById('vadToggle');
+            const isExpanded = content.classList.toggle('expanded');
+            toggle.textContent = isExpanded ? '▼ Collapse' : '▶ Expand';
+            if (isExpanded) {
+                updateRmsMarkers();
+            }
+        }
+
+        function updateVadParam(param, value) {
+            const numValue = parseFloat(value);
+
+            switch(param) {
+                case 'speechThreshold':
+                    VAD_SPEECH_THRESHOLD = numValue;
+                    document.getElementById('speechThresholdValue').textContent = numValue.toFixed(3);
+                    break;
+                case 'silenceThreshold':
+                    VAD_SILENCE_THRESHOLD = numValue;
+                    document.getElementById('silenceThresholdValue').textContent = numValue.toFixed(3);
+                    break;
+                case 'autoRestartThreshold':
+                    AUTO_RESTART_THRESHOLD = numValue;
+                    document.getElementById('autoRestartThresholdValue').textContent = numValue.toFixed(3);
+                    break;
+                case 'silenceDuration':
+                    VAD_SILENCE_DURATION_MS = parseInt(value);
+                    document.getElementById('silenceDurationValue').textContent = value;
+                    break;
+                case 'minTurnDuration':
+                    MIN_TURN_DURATION_MS = parseInt(value);
+                    document.getElementById('minTurnDurationValue').textContent = value;
+                    break;
+                case 'maxTurnDuration':
+                    MAX_TURN_MS = parseInt(value);
+                    document.getElementById('maxTurnDurationValue').textContent = value;
+                    break;
+                case 'overlapDuration':
+                    OVERLAP_MS = parseInt(value);
+                    OVERLAP_BYTES = Math.floor(16000 * (OVERLAP_MS / 1000)) * 2;
+                    document.getElementById('overlapDurationValue').textContent = value;
+                    break;
+                case 'pendingBuffer':
+                    PENDING_MAX_BYTES = parseInt(value) * 1024;
+                    document.getElementById('pendingBufferValue').textContent = value;
+                    break;
+            }
+
+            updateRmsMarkers();
+            log(`VAD param updated: ${param} = ${value}`, 'event');
+        }
+
+        function updateRmsMarkers() {
+            const markersContainer = document.getElementById('rmsMarkers');
+            if (!markersContainer) return;
+
+            // Scale: 0 to 0.1 RMS = 0% to 100%
+            const scale = 1000; // 0.1 RMS = 100%
+
+            markersContainer.innerHTML = `
+                <div class="rms-marker" style="left: ${VAD_SILENCE_THRESHOLD * scale}%; background: #ff6b6b;" title="Silence: ${VAD_SILENCE_THRESHOLD}"></div>
+                <div class="rms-marker" style="left: ${AUTO_RESTART_THRESHOLD * scale}%; background: #ffd700;" title="Auto-restart: ${AUTO_RESTART_THRESHOLD}"></div>
+                <div class="rms-marker" style="left: ${VAD_SPEECH_THRESHOLD * scale}%; background: #00ff88;" title="Speech: ${VAD_SPEECH_THRESHOLD}"></div>
+            `;
+        }
+
+        function updateRmsMeter(rms) {
+            const rmsBar = document.getElementById('rmsBar');
+            const rmsValueText = document.getElementById('rmsValueText');
+            if (!rmsBar || !rmsValueText) return;
+
+            // Scale: 0 to 0.1 RMS = 0% to 100%
+            const percentage = Math.min(100, rms * 1000);
+            rmsBar.style.width = percentage + '%';
+            rmsValueText.textContent = `RMS: ${rms.toFixed(4)}`;
+        }
+
+        function applyPreset(preset) {
+            const presets = {
+                voip: {
+                    speechThreshold: 0.012,
+                    silenceThreshold: 0.006,
+                    autoRestartThreshold: 0.009,
+                    silenceDuration: 350,
+                    minTurnDuration: 900,
+                    maxTurnDuration: 5000,
+                    overlapDuration: 250,
+                    pendingBuffer: 64
+                },
+                quiet: {
+                    speechThreshold: 0.008,
+                    silenceThreshold: 0.003,
+                    autoRestartThreshold: 0.005,
+                    silenceDuration: 400,
+                    minTurnDuration: 800,
+                    maxTurnDuration: 6000,
+                    overlapDuration: 300,
+                    pendingBuffer: 64
+                },
+                noisy: {
+                    speechThreshold: 0.025,
+                    silenceThreshold: 0.015,
+                    autoRestartThreshold: 0.020,
+                    silenceDuration: 300,
+                    minTurnDuration: 1000,
+                    maxTurnDuration: 4000,
+                    overlapDuration: 200,
+                    pendingBuffer: 64
+                },
+                fast: {
+                    speechThreshold: 0.015,
+                    silenceThreshold: 0.008,
+                    autoRestartThreshold: 0.012,
+                    silenceDuration: 250,
+                    minTurnDuration: 600,
+                    maxTurnDuration: 3000,
+                    overlapDuration: 150,
+                    pendingBuffer: 48
+                }
+            };
+
+            const p = presets[preset];
+            if (!p) return;
+
+            // Update sliders and values
+            document.getElementById('speechThreshold').value = p.speechThreshold;
+            document.getElementById('silenceThreshold').value = p.silenceThreshold;
+            document.getElementById('autoRestartThreshold').value = p.autoRestartThreshold;
+            document.getElementById('silenceDuration').value = p.silenceDuration;
+            document.getElementById('minTurnDuration').value = p.minTurnDuration;
+            document.getElementById('maxTurnDuration').value = p.maxTurnDuration;
+            document.getElementById('overlapDuration').value = p.overlapDuration;
+            document.getElementById('pendingBuffer').value = p.pendingBuffer;
+
+            // Apply all values
+            updateVadParam('speechThreshold', p.speechThreshold);
+            updateVadParam('silenceThreshold', p.silenceThreshold);
+            updateVadParam('autoRestartThreshold', p.autoRestartThreshold);
+            updateVadParam('silenceDuration', p.silenceDuration);
+            updateVadParam('minTurnDuration', p.minTurnDuration);
+            updateVadParam('maxTurnDuration', p.maxTurnDuration);
+            updateVadParam('overlapDuration', p.overlapDuration);
+            updateVadParam('pendingBuffer', p.pendingBuffer);
+
+            log(`Applied VAD preset: ${preset}`, 'event');
+        }
+
+        // Initialize markers on page load
+        document.addEventListener('DOMContentLoaded', updateRmsMarkers);
 
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
@@ -557,6 +971,7 @@
                 }
                 const rms = Math.sqrt(sum / inputData.length);
                 lastRms = rms;  // Store for auto-restart check in handleMessage
+                updateRmsMeter(rms);  // Update live RMS display
 
                 const now = Date.now();
 

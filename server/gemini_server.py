@@ -1282,6 +1282,8 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("Gemini Live Translation Server")
     logger.info("=" * 60)
+    logger.info(f"Project: {config.google_cloud_project}")
+    logger.info(f"Region: {config.google_cloud_location}")
     logger.info(f"Model: {config.gemini_model}")
     logger.info(f"Voice: {config.gemini_voice}")
     logger.info(f"Languages: {', '.join(SUPPORTED_LANGUAGES)}")

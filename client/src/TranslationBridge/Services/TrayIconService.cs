@@ -101,6 +101,17 @@ public class TrayIconService : IDisposable
     /// </summary>
     public event Action? OnStopSimulationRequested;
 
+    /// <summary>
+    /// Fired when VAD settings dialog is opened
+    /// Returns callbacks for live RMS and turn state display
+    /// </summary>
+    public event Func<(Func<float> GetRms, Func<string> GetTurnState)>? OnVadSettingsOpened;
+
+    /// <summary>
+    /// Fired when VAD settings are changed
+    /// </summary>
+    public event Action<VadConfig>? OnVadSettingsChanged;
+
     // Simulation state
     private ToolStripMenuItem? _simulateItem;
     private ToolStripMenuItem? _stopSimulateItem;
@@ -289,6 +300,14 @@ public class TrayIconService : IDisposable
         };
         _stopSimulateItem.Click += (s, e) => StopCallSimulation();
         _contextMenu.Items.Add(_stopSimulateItem);
+
+        // === VAD SETTINGS ===
+        var vadSettingsItem = new ToolStripMenuItem("⚙️ Impostazioni VAD...")
+        {
+            ToolTipText = "Configura Voice Activity Detection in tempo reale"
+        };
+        vadSettingsItem.Click += (s, e) => OpenVadSettingsDialog();
+        _contextMenu.Items.Add(vadSettingsItem);
 
         // === DIAGNOSTIC SECTION ===
         var diagnosticItem = new ToolStripMenuItem("🔬 Diagnostica Streaming...")
@@ -1050,6 +1069,44 @@ public class TrayIconService : IDisposable
         }
 
         return Icon.FromHandle(bitmap.GetHicon());
+    }
+
+    /// <summary>
+    /// Open VAD settings dialog for real-time parameter tuning
+    /// </summary>
+    private void OpenVadSettingsDialog()
+    {
+        _logger.LogInformation("Opening VAD settings dialog");
+
+        Task.Run(() =>
+        {
+            try
+            {
+                var thread = new Thread(() =>
+                {
+                    Application.EnableVisualStyles();
+                    using var dialog = new VadSettingsDialog(
+                        _config.Vad,
+                        vadConfig => OnVadSettingsChanged?.Invoke(vadConfig));
+
+                    // Get callbacks for live RMS and turn state
+                    var callbacks = OnVadSettingsOpened?.Invoke();
+                    if (callbacks.HasValue)
+                    {
+                        dialog.SetRmsCallbacks(callbacks.Value.GetRms, callbacks.Value.GetTurnState);
+                    }
+
+                    dialog.ShowDialog();
+                });
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+                thread.Join();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error opening VAD settings dialog");
+            }
+        });
     }
 
     /// <summary>

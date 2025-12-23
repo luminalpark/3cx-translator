@@ -755,19 +755,19 @@ public class TranslationWorker : BackgroundService
         // During simulation, bypass VAD but still track energy for auto-restart logic
         if (_isSimulating)
         {
-            var energy = CalculateEnergy(audioData);
-            _inboundLastRms = energy;  // Update for auto-restart check after turn_complete
+            var simEnergy = CalculateEnergy(audioData);
+            _inboundLastRms = simEnergy;  // Update for auto-restart check after turn_complete
 
             // Also update peak during WAIT_COMPLETE for auto-restart decision
-            if (_inboundTurnState == TurnState.WAIT_COMPLETE && energy > _inboundPeakRmsDuringWait)
-                _inboundPeakRmsDuringWait = energy;
+            if (_inboundTurnState == TurnState.WAIT_COMPLETE && simEnergy > _inboundPeakRmsDuringWait)
+                _inboundPeakRmsDuringWait = simEnergy;
 
             _ = _inboundClient.SendAudioChunkAsync(audioData);
             _simulationChunksSent++;
             if (_simulationChunksSent % 40 == 0)
             {
                 _logger.LogInformation("[SIMULATION] Chunks sent: {Count}, RMS: {Rms:F4}, State: {State}",
-                    _simulationChunksSent, energy, _inboundTurnState);
+                    _simulationChunksSent, simEnergy, _inboundTurnState);
             }
             return;
         }
@@ -1274,7 +1274,7 @@ public class TranslationWorker : BackgroundService
             }
             else
             {
-                _logger.LogDebug("[OUTBOUND] No auto-restart (RMS: {Rms:F4} < {Threshold}) - going IDLE",
+                _logger.LogInformation("[OUTBOUND] No auto-restart (RMS: {Rms:F4} < {Threshold}) - going IDLE",
                     rmsForRestart, _config.Vad.AutoRestartThreshold);
                 _outboundTurnState = TurnState.IDLE;
                 _outboundPendingChunks.Clear();

@@ -1,4 +1,4 @@
-# Gemini Live API Translation Server
+# Vertex AI Gemini Live API Translation Server
 # Lightweight container - no GPU required (inference runs on Google Cloud)
 
 FROM python:3.11-slim
@@ -6,6 +6,9 @@ FROM python:3.11-slim
 # Prevent Python from writing pyc files and buffering stdout/stderr
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+
+# Vertex AI authentication - credentials file mounted at runtime
+ENV GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

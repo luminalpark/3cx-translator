@@ -67,3 +67,4 @@ PublishOutput/
 *.nuget.props
 *.nuget.targets
 launchSettings.json
+ai-tools-*.json

@@ -1,17 +1,22 @@
 """
-Gemini Live API Translation Server
-Real-time speech-to-speech translation using Google Gemini
+Gemini Live API Translation Server (Vertex AI)
+Real-time speech-to-speech translation using Google Gemini on Vertex AI
 
 Proxy architecture:
-  Client (WebSocket) -> This Server -> Gemini Live API (WebSocket)
+  Client (WebSocket) -> This Server -> Vertex AI Gemini Live API (WebSocket)
 
 Features:
 - Real-time bidirectional audio streaming
 - Automatic language detection
 - 5 language pairs: DE, ES, EN, FR <-> IT
+- Low latency via regional endpoint (europe-west4)
 
 Usage:
-    GEMINI_API_KEY=your_key python gemini_server.py
+    GOOGLE_CLOUD_PROJECT=your-project-id python gemini_server.py
+
+Requires:
+- Service Account with roles/aiplatform.user
+- GOOGLE_APPLICATION_CREDENTIALS pointing to credentials.json
 """
 
 import asyncio
@@ -26,7 +31,6 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
 
 import numpy as np
-import wave
 from scipy import signal
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,8 +59,12 @@ logger = logging.getLogger("gemini_server")
 @dataclass
 class ServerConfig:
     """Server configuration from environment variables"""
-    gemini_api_key: str
-    gemini_model: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+    # Vertex AI configuration
+    google_cloud_project: str
+    google_cloud_location: str = "europe-west4"
+    # Gemini model and voice
+    # NOTE: gemini-live-2.5-flash-native-audio is required for Manual VAD with native audio I/O
+    gemini_model: str = "gemini-live-2.5-flash-native-audio"
     gemini_voice: str = "Kore"
     server_host: str = "0.0.0.0"
     server_port: int = 8001
@@ -70,13 +78,14 @@ class ServerConfig:
 
     @classmethod
     def from_env(cls) -> "ServerConfig":
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is required")
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if not project:
+            raise ValueError("GOOGLE_CLOUD_PROJECT environment variable is required")
 
         return cls(
-            gemini_api_key=api_key,
-            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025"),
+            google_cloud_project=project,
+            google_cloud_location=os.environ.get("GOOGLE_CLOUD_LOCATION", "europe-west4"),
+            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-live-2.5-flash-native-audio"),
             gemini_voice=os.environ.get("GEMINI_VOICE", "Kore"),
             server_host=os.environ.get("SERVER_HOST", "0.0.0.0"),
             server_port=int(os.environ.get("SERVER_PORT", "8001")),
@@ -163,6 +172,9 @@ class ClientSession:
     chunks_received: int = 0
     chunks_sent: int = 0
     last_chunk_time: float = 0.0
+    # Manual VAD turn state
+    turn_active: bool = False  # True after ActivityStart, False after ActivityEnd
+    waiting_for_turn_complete: bool = False  # True after ActivityEnd until turn_complete
 
 
 # =============================================================================
@@ -189,31 +201,6 @@ def base64_to_pcm16(audio_base64: str) -> bytes:
     return base64.b64decode(audio_base64)
 
 
-# Debug: counter for audio files
-_audio_file_counter = 0
-
-def save_debug_audio(audio_data: bytes, session_id: str, direction: str):
-    """Save audio to WAV file for debugging"""
-    global _audio_file_counter
-    _audio_file_counter += 1
-
-    # Create logs directory if not exists
-    os.makedirs("/app/logs", exist_ok=True)
-
-    filename = f"/app/logs/debug_{session_id}_{direction}_{_audio_file_counter}.wav"
-
-    try:
-        with wave.open(filename, 'wb') as wav_file:
-            wav_file.setnchannels(1)  # mono
-            wav_file.setsampwidth(2)  # 16-bit
-            wav_file.setframerate(16000)  # 16kHz
-            wav_file.writeframes(audio_data)
-
-        logger.info(f"[{session_id}] DEBUG: Saved audio to {filename}")
-    except Exception as e:
-        logger.warning(f"[{session_id}] Failed to save debug audio: {e}")
-
-
 # =============================================================================
 # Gemini Translation Server
 # =============================================================================
@@ -227,10 +214,14 @@ class GeminiTranslationServer:
         self._genai_client = None
 
     def _get_genai_client(self):
-        """Lazy initialization of Google GenAI client"""
+        """Lazy initialization of Google GenAI client for Vertex AI"""
         if self._genai_client is None:
             from google import genai
-            self._genai_client = genai.Client(api_key=self.config.gemini_api_key)
+            self._genai_client = genai.Client(
+                vertexai=True,
+                project=self.config.google_cloud_project,
+                location=self.config.google_cloud_location
+            )
         return self._genai_client
 
     def _build_system_instruction(self, source_lang: str, target_lang: str) -> str:
@@ -295,10 +286,6 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
         logger.info(f"[{session.session_id}] Sending {len(audio_data)} bytes to Gemini ({session.source_lang} -> {session.target_lang})")
 
-        # DEBUG: Save audio to file for analysis
-        save_debug_audio(audio_data, session.session_id, f"{session.source_lang}_to_{session.target_lang}")
-        
-
         # Collect response
         translated_audio = bytearray()
         source_text = ""
@@ -314,13 +301,14 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             ) as gemini_session:
                 logger.info(f"[{session.session_id}] Gemini session opened, sending audio...")
 
-                # Send audio to Gemini (raw bytes)
+                # Send audio to Gemini (PCM16 @ 16kHz, little-endian)
+                # MIME type must be exactly "audio/pcm" for native audio model
                 await gemini_session.send(
                     input=types.LiveClientRealtimeInput(
                         media_chunks=[
                             types.Blob(
-                                mime_type="audio/pcm;rate=16000",
-                                data=audio_data  # Send raw bytes
+                                mime_type="audio/pcm",
+                                data=audio_data
                             )
                         ]
                     ),
@@ -385,15 +373,7 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         # Resample from 24kHz to 16kHz if we got audio
         output_audio = bytes()
         if len(translated_audio) > 0:
-            # Log audio info to help debug sample rate issues
-            num_samples = len(translated_audio) // 2  # 16-bit = 2 bytes per sample
-            duration_24k = num_samples / 24000
-            duration_16k = num_samples / 16000
-            duration_48k = num_samples / 48000
-            logger.info(f"[{session.session_id}] Received audio: {len(translated_audio)} bytes, {num_samples} samples")
-            logger.info(f"[{session.session_id}] Duration if 24kHz: {duration_24k:.2f}s, if 16kHz: {duration_16k:.2f}s, if 48kHz: {duration_48k:.2f}s")
-
-            # Gemini outputs 24kHz audio (verify with logs above if using different model)
+            # Gemini outputs 24kHz audio
             audio_24k = np.frombuffer(bytes(translated_audio), dtype=np.int16)
             audio_16k = resample_audio(audio_24k, 24000, 16000)
             output_audio = audio_16k.tobytes()
@@ -462,7 +442,20 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         # - Client sends activity_end after speech (triggers translation)
         # - For continuous audio like file playback, client sends periodic
         #   activity_end signals to trigger translations at regular intervals
+        # MANUAL VAD Configuration for gemini-live-2.5-flash-native-audio
+        # Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/live-api
+        #
+        # With Manual VAD (automatic_activity_detection.disabled = True):
+        # - Client MUST send ActivityStart before sending audio
+        # - Client sends audio chunks with mime_type="audio/pcm" (PCM16@16kHz)
+        # - Client sends ActivityEnd when speech is done (triggers response)
+        # - Server responds with audio at 24kHz PCM16
+        #
+        # This enables SIMULTANEOUS translation (output while input continues)
         config = types.LiveConnectConfig(
+            # Native audio model (gemini-live-2.5-flash-native-audio) only supports ONE modality
+            # Cannot use ["AUDIO", "TEXT"] - causes error:
+            # "At most one response modality can be specified in the setup request"
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -474,9 +467,10 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             system_instruction=system_instruction,
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
+            # Manual VAD - client controls turn boundaries with ActivityStart/ActivityEnd
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=True  # Manual VAD - client controls turn boundaries
+                    disabled=True  # MANUAL VAD - client sends ActivityStart/ActivityEnd
                 )
             )
         )
@@ -505,60 +499,97 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
             logger.info(f"[{session.session_id}] Gemini session closed")
 
     async def _send_loop(self, session: ClientSession, gemini_session):
-        """Send audio chunks from queue to Gemini"""
+        """Send audio chunks to Gemini with Manual VAD.
+
+        Manual VAD sequence (client-controlled):
+        1. Client sends activity_start message -> server sends ActivityStart to Gemini
+        2. Client sends audio chunks -> server forwards to Gemini
+        3. Client sends activity_end message -> server sends ActivityEnd to Gemini
+        4. Wait for turn_complete from Gemini
+        5. Repeat
+
+        NOTE: ActivityStart/ActivityEnd are controlled ONLY by client messages.
+        This loop just forwards audio chunks when turn_active is True.
+        Audio received during WAIT_COMPLETE is dropped (client shouldn't send any).
+        """
         from google.genai import types
 
-        logger.info(f"[{session.session_id}] Send loop started")
+        logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+        logger.info(f"[{session.session_id}] 🚀 SEND LOOP STARTED (Manual VAD - client-controlled)")
+        logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+
+        turn_audio_bytes = 0
+        turn_start_time = None
 
         try:
             while not session.is_closing:
                 try:
-                    # Wait for audio with timeout to check is_closing periodically
                     audio_data = await asyncio.wait_for(
                         session.audio_queue.get(),
-                        timeout=1.0
+                        timeout=0.5
                     )
 
-                    if audio_data is None:  # Poison pill
+                    if audio_data is None:
+                        logger.info(f"[{session.session_id}] 🛑 Poison pill received, exiting send loop")
                         break
 
-                    # Send audio to Gemini
+                    # Drop audio if not in active turn or waiting for turn_complete
+                    # With the new client, this shouldn't happen, but be defensive
+                    if session.waiting_for_turn_complete:
+                        logger.warning(f"[{session.session_id}] ⚠️  DROPPING audio (waiting_for_turn_complete=True)")
+                        continue
+                    if not session.turn_active:
+                        logger.warning(f"[{session.session_id}] ⚠️  DROPPING audio (turn_active=False)")
+                        continue
+
+                    # Track turn timing
+                    if turn_start_time is None:
+                        turn_start_time = time.time()
+
+                    # Send audio chunk (PCM16 @ 16kHz, little-endian)
+                    audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                    rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+                    turn_audio_bytes += len(audio_data)
+
+                    # Log every 25 chunks for better visibility
+                    if session.chunks_sent % 25 == 0:
+                        elapsed = time.time() - turn_start_time if turn_start_time else 0
+                        logger.info(f"[{session.session_id}] 🔊 AUDIO #{session.chunks_sent}: "
+                                   f"{len(audio_data)}B, rms={rms:.0f}, turn_total={turn_audio_bytes}B, elapsed={elapsed:.2f}s")
+
                     await gemini_session.send_realtime_input(
-                        audio=types.Blob(
-                            data=audio_data,
-                            mime_type="audio/pcm;rate=16000"
-                        )
+                        audio=types.Blob(data=audio_data, mime_type="audio/pcm")
                     )
                     session.chunks_sent += 1
-                    # Log every 40 chunks (~1 second at 25ms chunks)
-                    if session.chunks_sent % 40 == 0:
-                        logger.info(f"[{session.session_id}] Audio chunks sent to Gemini: {session.chunks_sent}")
 
                 except asyncio.TimeoutError:
-                    continue  # Check is_closing and continue
-                except Exception as e:
-                    logger.warning(f"[{session.session_id}] Send error: {e}")
+                    pass
+
+                if session.is_closing:
                     break
 
         except asyncio.CancelledError:
-            pass
+            logger.info(f"[{session.session_id}] Send loop cancelled")
+        except Exception as e:
+            logger.error(f"[{session.session_id}] ❌ SEND LOOP ERROR: {e}")
 
-        logger.info(f"[{session.session_id}] Send loop ended")
+        logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+        logger.info(f"[{session.session_id}] 🏁 SEND LOOP ENDED (total_sent={session.chunks_sent}, turn_bytes={turn_audio_bytes})")
+        logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
 
     async def send_audio_chunk(self, session: ClientSession, audio_data: bytes):
         """Queue audio chunk for sending to Gemini.
 
-        Best practice: Always send audio continuously (full duplex).
-        Do NOT buffer during model turn - Gemini handles this internally.
+        With Manual VAD, the client controls when to send audio:
+        - Only send when turn_active is True (after activity_start)
+        - Stop sending after activity_end (WAIT_COMPLETE state)
+        - Audio sent in wrong state will be dropped by _send_loop
         """
         if session.audio_queue and not session.is_closing:
             try:
                 session.audio_queue.put_nowait(audio_data)
                 session.chunks_received += 1
                 session.last_chunk_time = time.time()
-                # Log every 40 chunks (~1 second at 25ms chunks)
-                if session.chunks_received % 40 == 0:
-                    logger.info(f"[{session.session_id}] Audio chunks queued: {session.chunks_received} (queue size: {session.audio_queue.qsize()})")
             except asyncio.QueueFull:
                 logger.warning(f"[{session.session_id}] Audio queue full, dropping chunk")
 
@@ -581,17 +612,32 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
         Call this before sending audio chunks to indicate the user started speaking.
         Required when automatic_activity_detection is disabled.
+        Sets session.turn_active to prevent duplicate ActivityStart in _send_loop.
         """
         from google.genai import types
 
         if session.gemini_session and session.streaming_ready and not session.is_closing:
             try:
-                logger.info(f"[{session.session_id}] Sending activity_start to Gemini (Manual VAD)")
+                # Set flag BEFORE sending to prevent race with _send_loop
+                session.turn_active = True
+                session.chunks_sent = 0  # Reset for new turn
+                logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+                logger.info(f"[{session.session_id}] 🎙️  >>> ACTIVITY_START >>> (Manual VAD)")
+                logger.info(f"[{session.session_id}]     turn_active={session.turn_active}")
+                logger.info(f"[{session.session_id}]     waiting_for_turn_complete={session.waiting_for_turn_complete}")
+                logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
                 await session.gemini_session.send_realtime_input(
                     activity_start=types.ActivityStart()
                 )
+                logger.info(f"[{session.session_id}] ✅ ActivityStart SENT to Gemini")
             except Exception as e:
-                logger.warning(f"[{session.session_id}] Failed to send activity_start: {e}")
+                logger.error(f"[{session.session_id}] ❌ FAILED to send ActivityStart: {e}")
+                session.turn_active = False  # Reset on error
+        else:
+            logger.warning(f"[{session.session_id}] ⚠️  Cannot send ActivityStart: "
+                          f"gemini_session={session.gemini_session is not None}, "
+                          f"streaming_ready={session.streaming_ready}, "
+                          f"is_closing={session.is_closing}")
 
     async def send_activity_end(self, session: ClientSession):
         """Signal end of user speech (Manual VAD).
@@ -599,31 +645,50 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         Call this after sending audio chunks to indicate the user stopped speaking.
         This triggers Gemini to generate the translation response.
         Required when automatic_activity_detection is disabled.
+
+        CRITICAL: After this, no more audio chunks should be sent until turn_complete!
         """
         from google.genai import types
 
         if session.gemini_session and session.streaming_ready and not session.is_closing:
             try:
-                logger.info(f"[{session.session_id}] Sending activity_end to Gemini (Manual VAD) - triggering response")
+                # Mark turn as closed - send_loop will drop audio until turn_complete
+                session.turn_active = False
+                session.waiting_for_turn_complete = True
+
+                logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+                logger.info(f"[{session.session_id}] 🛑 >>> ACTIVITY_END >>> (Manual VAD)")
+                logger.info(f"[{session.session_id}]     chunks_sent={session.chunks_sent}")
+                logger.info(f"[{session.session_id}]     turn_active={session.turn_active}")
+                logger.info(f"[{session.session_id}]     waiting_for_turn_complete={session.waiting_for_turn_complete}")
+                logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
                 await session.gemini_session.send_realtime_input(
                     activity_end=types.ActivityEnd()
                 )
+                logger.info(f"[{session.session_id}] ✅ ActivityEnd SENT - waiting for Gemini response...")
             except Exception as e:
-                logger.warning(f"[{session.session_id}] Failed to send activity_end: {e}")
+                logger.error(f"[{session.session_id}] ❌ FAILED to send ActivityEnd: {e}")
+                # Reset state on error
+                session.turn_active = False
+                session.waiting_for_turn_complete = False
+        else:
+            logger.warning(f"[{session.session_id}] ⚠️  Cannot send ActivityEnd: "
+                          f"gemini_session={session.gemini_session is not None}, "
+                          f"streaming_ready={session.streaming_ready}, "
+                          f"is_closing={session.is_closing}")
 
     async def _receive_loop(self, session: ClientSession, gemini_session):
         """Receive responses from Gemini and forward to client"""
         from google.genai import types
 
-        logger.info(f"[{session.session_id}] Receive loop started")
+        logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+        logger.info(f"[{session.session_id}] 👂 RECEIVE LOOP STARTED")
+        logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
 
         try:
             # Loop to handle multiple turns - receive() completes after each turn
-            outer_loop_count = 0
+            turn_count = 0
             while not session.is_closing:
-                outer_loop_count += 1
-                turn_count = 0
-                logger.info(f"[{session.session_id}] Starting receive() iteration #{outer_loop_count}")
                 try:
                     async for response in gemini_session.receive():
                         if session.is_closing:
@@ -652,27 +717,47 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                         })
                                         logger.info(f"[{session.session_id}] Source: {text}")
 
-                                # Audio from model turn
+                                # Content from model turn (audio and/or text)
                                 if hasattr(content, 'model_turn') and content.model_turn:
                                     # Mark that we're in a model turn (Gemini is speaking)
                                     if not session.in_model_turn:
                                         session.in_model_turn = True
-                                        logger.info(f"[{session.session_id}] Model turn started")
+                                        logger.info(f"[{session.session_id}] ────────────────────────────────────────")
+                                        logger.info(f"[{session.session_id}] 🤖 MODEL TURN STARTED")
+                                        logger.info(f"[{session.session_id}] ────────────────────────────────────────")
                                         await session.websocket.send_json({
                                             "type": "model_turn_started"
                                         })
 
-                                    for part in content.model_turn.parts:
+                                    parts = content.model_turn.parts if hasattr(content.model_turn, 'parts') else []
+                                    for part in parts:
+                                        # Handle TEXT response (for debugging)
+                                        if hasattr(part, 'text') and part.text:
+                                            logger.info(f"[{session.session_id}] 📝 MODEL TEXT: {part.text}")
+                                            await session.websocket.send_json({
+                                                "type": "model_text",
+                                                "text": part.text
+                                            })
+
+                                        # Handle AUDIO response
                                         if hasattr(part, 'inline_data') and part.inline_data:
                                             data = part.inline_data.data
                                             mime = getattr(part.inline_data, 'mime_type', 'unknown')
+                                            data_len = len(data) if data else 0
+
+                                            # CRITICAL: Log MIME type prominently - this is key for debugging!
+                                            logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+                                            logger.info(f"[{session.session_id}] 🔈 MODEL AUDIO RECEIVED:")
+                                            logger.info(f"[{session.session_id}]     MIME TYPE: {mime}")
+                                            logger.info(f"[{session.session_id}]     DATA TYPE: {type(data).__name__}")
+                                            logger.info(f"[{session.session_id}]     LENGTH: {data_len} bytes")
+                                            logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+
                                             if isinstance(data, bytes):
-                                                # Log for sample rate debugging
-                                                num_samples = len(data) // 2
-                                                logger.debug(f"[{session.session_id}] Stream chunk: {len(data)} bytes ({num_samples} samples), mime: {mime}")
                                                 # Resample from 24kHz to 16kHz
                                                 audio_24k = np.frombuffer(data, dtype=np.int16)
                                                 audio_16k = resample_audio(audio_24k, 24000, 16000)
+                                                logger.info(f"[{session.session_id}] ✅ Resampled {len(audio_24k)} samples (24kHz) -> {len(audio_16k)} samples (16kHz)")
                                                 await session.websocket.send_bytes(audio_16k.tobytes())
                                             elif isinstance(data, str):
                                                 # Handle base64 encoded audio
@@ -683,9 +768,12 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                                     audio_bytes = base64.b64decode(data)
                                                     audio_24k = np.frombuffer(audio_bytes, dtype=np.int16)
                                                     audio_16k = resample_audio(audio_24k, 24000, 16000)
+                                                    logger.info(f"[{session.session_id}] ✅ Decoded base64 and resampled {len(audio_24k)} -> {len(audio_16k)} samples")
                                                     await session.websocket.send_bytes(audio_16k.tobytes())
                                                 except Exception as e:
-                                                    logger.warning(f"[{session.session_id}] Failed to decode audio: {e}")
+                                                    logger.error(f"[{session.session_id}] ❌ Failed to decode audio: {e}")
+                                            else:
+                                                logger.warning(f"[{session.session_id}] ⚠️  UNEXPECTED DATA TYPE: {type(data)}")
 
                                 # Output transcription (translated text)
                                 if hasattr(content, 'output_transcription') and content.output_transcription:
@@ -706,33 +794,24 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
                                 if getattr(content, 'turn_complete', False):
                                     turn_count += 1
                                     session.in_model_turn = False
-                                    logger.info(f"[{session.session_id}] Turn {turn_count} complete (chunks: queued={session.chunks_received}, sent={session.chunks_sent})")
+                                    # CRITICAL: Reset turn state so send_loop can start new turn
+                                    session.waiting_for_turn_complete = False
+                                    session.turn_active = False  # Will trigger ActivityStart on next audio
+                                    logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+                                    logger.info(f"[{session.session_id}] ✅ TURN {turn_count} COMPLETE")
+                                    logger.info(f"[{session.session_id}]     chunks_received={session.chunks_received}")
+                                    logger.info(f"[{session.session_id}]     chunks_sent={session.chunks_sent}")
+                                    logger.info(f"[{session.session_id}]     turn_active={session.turn_active}")
+                                    logger.info(f"[{session.session_id}]     waiting_for_turn_complete={session.waiting_for_turn_complete}")
+                                    logger.info(f"[{session.session_id}]     READY FOR NEW TURN")
+                                    logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
                                     await session.websocket.send_json({
                                         "type": "turn_complete"
                                     })
-
-                                    # With Manual VAD: After turn_complete, if audio is still streaming,
-                                    # automatically send activity_start to begin the next turn.
-                                    # Check if we received audio recently (within last 2 seconds)
-                                    time_since_last_chunk = time.time() - session.last_chunk_time
-                                    if time_since_last_chunk < 2.0 and session.last_chunk_time > 0:
-                                        logger.info(f"[{session.session_id}] Audio still streaming, sending activity_start for next turn")
-                                        try:
-                                            await gemini_session.send_realtime_input(
-                                                activity_start=types.ActivityStart()
-                                            )
-                                        except Exception as e:
-                                            logger.warning(f"[{session.session_id}] Failed to send auto activity_start: {e}")
-                                    else:
-                                        logger.info(f"[{session.session_id}] No recent audio, waiting for client activity_start")
-
                                     break  # Exit inner loop to call receive() again
 
                         except Exception as e:
                             logger.warning(f"[{session.session_id}] Error forwarding response: {e}")
-
-                    # After inner for-loop completes (turn_complete), log before calling receive() again
-                    logger.info(f"[{session.session_id}] Calling receive() for next turn")
 
                 except Exception as e:
                     error_str = str(e).lower()
@@ -750,9 +829,11 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
         except asyncio.CancelledError:
             logger.info(f"[{session.session_id}] Receive loop cancelled")
         except Exception as e:
-            logger.error(f"[{session.session_id}] Receive loop error: {e}")
+            logger.error(f"[{session.session_id}] ❌ RECEIVE LOOP ERROR: {e}")
 
-        logger.info(f"[{session.session_id}] Receive loop ended")
+        logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
+        logger.info(f"[{session.session_id}] 🏁 RECEIVE LOOP ENDED (total_turns={turn_count})")
+        logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
 
     async def close_streaming_session(self, session: ClientSession):
         """Close the Gemini streaming session"""
@@ -893,12 +974,15 @@ async def websocket_translate(
 
             if "bytes" in message:
                 # Binary audio data
+                audio_bytes = message["bytes"]
                 if session.streaming_enabled and session.streaming_ready:
                     # Streaming mode: forward audio directly to Gemini
-                    await server.send_audio_chunk(session, message["bytes"])
+                    if session.chunks_received % 50 == 0:  # Log every 50 chunks
+                        logger.info(f"[{session_id}] Audio chunk #{session.chunks_received}, {len(audio_bytes)} bytes")
+                    await server.send_audio_chunk(session, audio_bytes)
                 else:
                     # Buffer mode: add to buffer for later processing
-                    session.audio_buffer.extend(message["bytes"])
+                    session.audio_buffer.extend(audio_bytes)
 
             elif "text" in message:
                 # JSON control message
@@ -1147,8 +1231,7 @@ async def handle_json_message(
             })
 
     elif msg_type == "activity_end":
-        # Signal end of user speech (Manual VAD)
-        # Call this after sending audio chunks to trigger translation
+        # Signal end of user speech (Manual VAD) - triggers translation response
         if session.streaming_enabled and session.streaming_ready:
             await server.send_activity_end(session)
             await websocket.send_json({

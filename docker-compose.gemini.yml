@@ -14,22 +14,25 @@ services:
       - "8001:8001"
 
     volumes:
+      # Mount credentials file for Vertex AI authentication
+      - ./ai-tools-471809-5c89057d4ac6.json:/app/credentials.json:ro
       - ./logs:/app/logs
 
     environment:
-      # Required: Google AI Studio API Key
-      # Get yours at: https://aistudio.google.com/app/apikey
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # Required: Vertex AI Configuration
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - GOOGLE_CLOUD_LOCATION=${GOOGLE_CLOUD_LOCATION:-europe-west4}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
 
       # Server configuration
       - SERVER_PORT=8001
       - SERVER_HOST=0.0.0.0
 
-      # Gemini model configuration
-      # Available models:
-      # - gemini-2.0-flash-exp (default, fast)
-      # - gemini-2.5-flash-native-audio-preview-12-2025 (native audio)
-      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash-exp}
+      # Vertex AI Gemini model configuration
+      # Available models for Live API:
+      # - gemini-2.5-flash-live-preview-04-09 (recommended)
+      # - gemini-live-2.5-flash (latest)
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash-live-preview-04-09}
 
       # Voice configuration
       # Available voices: Aoede, Charon, Fenrir, Kore, Puck

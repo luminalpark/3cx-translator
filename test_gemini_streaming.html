@@ -157,7 +157,7 @@
         <div class="config">
             <div>
                 <label>Server URL</label>
-                <input type="text" id="serverUrl" value="ws://3cxtranslate.luminalpark.com/ws/translate">
+                <input type="text" id="serverUrl" value="ws://localhost:8001/ws/translate">
             </div>
             <div>
                 <label>API Key (optional)</label>
@@ -186,7 +186,7 @@
         </div>
 
         <button id="startBtn" onclick="start()">Start Streaming</button>
-        <button id="endTurnBtn" onclick="endTurn()" disabled>End Turn (Translate)</button>
+        <button id="endTurnBtn" onclick="endTurn()" disabled style="display: none;">End Turn (Manual)</button>
         <button id="stopBtn" onclick="stop()" disabled class="stop">Stop</button>
     </div>
 
@@ -215,6 +215,40 @@
         let isPlaying = false;
         let isMuted = false;  // Mute mic during audio playback
         let unmuteTimeout = null;
+
+        // Manual VAD State Machine
+        // IDLE: waiting for speech, not sending audio to server
+        // ACTIVE: speech detected, sent activity_start, sending audio chunks
+        // WAIT_COMPLETE: sent activity_end, waiting for turn_complete, NOT sending audio
+        let turnState = 'IDLE';
+
+        // VAD settings (ottimizzate per VoIP/telefonia)
+        const VAD_SPEECH_THRESHOLD = 0.012;   // RMS threshold to detect speech start (lower for VoIP)
+        const VAD_SILENCE_THRESHOLD = 0.006;  // RMS threshold for silence (lower for telephony)
+        const VAD_SILENCE_DURATION_MS = 350;  // Trigger translation after 350ms silence
+        const MIN_TURN_DURATION_MS = 900;     // Don't close turn if less than 900ms of speech
+        const MAX_TURN_MS = 5000;             // Safety limit at 5s, NOT a fixed timer
+        const AUTO_RESTART_THRESHOLD = 0.009; // RMS threshold for auto-restart (coerente con speech)
+
+        // Buffer e Overlap settings
+        const OVERLAP_MS = 250;
+        const OVERLAP_SAMPLES = Math.floor(16000 * (OVERLAP_MS / 1000)); // 4000 samples
+        const OVERLAP_BYTES = OVERLAP_SAMPLES * 2; // PCM16 = 8000 bytes
+        const PENDING_MAX_BYTES = 16000 * 2 * 2; // ~2s di PCM16 mono @16kHz = 64KB
+
+        let silenceStartTime = null;
+        let speechStartTime = null;           // When the current turn started
+        let sampleRateLogged = false;         // Log sample rate once
+        let lastRms = 0;                      // Store last RMS for auto-restart in handleMessage
+        let overlapTail = null;               // Last 250ms of audio for overlap
+        let pendingAudioChunks = [];          // Buffer audio during WAIT_COMPLETE
+        let pendingBytes = 0;                 // Track pending buffer size
+
+        function setTurnState(newState) {
+            const oldState = turnState;
+            turnState = newState;
+            log(`Turn state: ${oldState} → ${newState}`, 'event');
+        }
 
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
@@ -291,14 +325,22 @@
 
                 ws.onmessage = async (event) => {
                     if (event.data instanceof ArrayBuffer) {
-                        // Audio data - queue for playback
+                        // Audio data as ArrayBuffer - queue for playback
                         const audioData = new Int16Array(event.data);
-                        log(`Received ${audioData.length} audio samples`, 'audio');
+                        log(`Received ${audioData.length} audio samples (ArrayBuffer)`, 'audio');
                         queueAudioPlayback(audioData);
-                    } else {
+                    } else if (event.data instanceof Blob) {
+                        // Audio data as Blob - convert to ArrayBuffer first
+                        const arrayBuffer = await event.data.arrayBuffer();
+                        const audioData = new Int16Array(arrayBuffer);
+                        log(`Received ${audioData.length} audio samples (Blob)`, 'audio');
+                        queueAudioPlayback(audioData);
+                    } else if (typeof event.data === 'string') {
                         // JSON message
                         const data = JSON.parse(event.data);
                         handleMessage(data);
+                    } else {
+                        log(`Unknown message type: ${typeof event.data}`, 'error');
                     }
                 };
 
@@ -326,9 +368,13 @@
         }
 
         function endTurn() {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                log('Sending end_of_turn signal to trigger translation...', 'event');
-                ws.send(JSON.stringify({ type: 'end_of_turn' }));
+            if (ws && ws.readyState === WebSocket.OPEN && turnState === 'ACTIVE') {
+                const turnDuration = speechStartTime ? Date.now() - speechStartTime : 0;
+                log(`Manual: Sending activity_end (turn ${turnDuration}ms)...`, 'event');
+                ws.send(JSON.stringify({ type: 'activity_end' }));
+                setTurnState('WAIT_COMPLETE');
+                silenceStartTime = null;
+                speechStartTime = null;
             }
         }
 
@@ -357,16 +403,26 @@
 
                 case 'streaming_enabled':
                     if (data.enabled) {
-                        log('Streaming mode enabled - real-time translation active', 'event');
+                        log('Streaming mode enabled - Manual VAD with client-side silence detection', 'event');
                         setStatus('Connected - Streaming', 'streaming');
                         modeBadge.style.display = 'inline-block';
                         streamingIndicator.style.display = 'block';
                         placeholder.style.display = 'none';
+                        // Reset state machine
+                        turnState = 'IDLE';
+                        silenceStartTime = null;
+                        speechStartTime = null;
+                        sampleRateLogged = false;
+                        // Show manual End Turn button
+                        endTurnBtn.style.display = 'inline-block';
+                        endTurnBtn.disabled = false;
+                        // Start recording
                         startRecording();
                     } else {
                         log('Streaming mode disabled', 'event');
                         modeBadge.style.display = 'none';
                         streamingIndicator.style.display = 'none';
+                        endTurnBtn.style.display = 'none';
                     }
                     break;
 
@@ -391,18 +447,67 @@
                     }
                     break;
 
+                case 'model_text':
+                    // TEXT response from model (for debugging when AUDIO+TEXT modalities enabled)
+                    if (data.text) {
+                        log(`Model TEXT: "${data.text}"`, 'translation');
+                    }
+                    break;
+
                 case 'model_turn_started':
                     log('Gemini speaking (your audio is buffered)', 'event');
                     setStatus('Connected - Translating...', 'speaking');
                     break;
 
                 case 'turn_complete':
-                    log('Turn complete', 'event');
+                    log('Turn complete - checking for auto-restart', 'event');
                     setStatus('Connected - Streaming', 'streaming');
+
+                    if (lastRms > AUTO_RESTART_THRESHOLD) {
+                        log(`Auto-restart (RMS: ${lastRms.toFixed(4)}) - sending activity_start`, 'event');
+                        ws.send(JSON.stringify({ type: 'activity_start' }));
+
+                        // Invia overlap per continuità lessicale
+                        if (overlapTail) {
+                            log(`Sending overlap: ${overlapTail.byteLength} bytes`, 'audio');
+                            ws.send(overlapTail);
+                            overlapTail = null;
+                        }
+
+                        // Flush pending audio (bufferizzato durante WAIT_COMPLETE)
+                        if (pendingAudioChunks.length) {
+                            log(`Flushing buffered audio: ${pendingAudioChunks.length} chunks (${pendingBytes} bytes)`, 'event');
+                            for (const buf of pendingAudioChunks) {
+                                ws.send(buf);
+                            }
+                            pendingAudioChunks = [];
+                            pendingBytes = 0;
+                        }
+
+                        setTurnState('ACTIVE');
+                        speechStartTime = Date.now();
+                        silenceStartTime = null;
+                    } else {
+                        // No speech detected - go to IDLE and wait for next speech
+                        setTurnState('IDLE');
+                        silenceStartTime = null;
+                        speechStartTime = null;
+                        // Svuota buffer se nessuno parla
+                        pendingAudioChunks = [];
+                        pendingBytes = 0;
+                    }
                     break;
 
                 case 'end_of_turn_sent':
                     log('End of turn acknowledged - waiting for translation', 'event');
+                    break;
+
+                case 'activity_start_sent':
+                    log('Activity start acknowledged - listening...', 'event');
+                    break;
+
+                case 'activity_end_sent':
+                    log('Activity end acknowledged - translating...', 'event');
                     break;
 
                 case 'translation':
@@ -438,15 +543,123 @@
 
                 const inputData = e.inputBuffer.getChannelData(0);
 
-                // Convert Float32 to Int16
-                const int16Data = new Int16Array(inputData.length);
-                for (let i = 0; i < inputData.length; i++) {
-                    const s = Math.max(-1, Math.min(1, inputData[i]));
-                    int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                // Log sample rate once for debugging
+                if (!sampleRateLogged) {
+                    log(`Input buffer sampleRate: ${e.inputBuffer.sampleRate}`, 'event');
+                    log(`AudioContext sampleRate: ${audioContext.sampleRate}`, 'event');
+                    sampleRateLogged = true;
                 }
 
-                // Send as binary (streaming to Gemini)
-                ws.send(int16Data.buffer);
+                // Calculate RMS energy for voice activity detection
+                let sum = 0;
+                for (let i = 0; i < inputData.length; i++) {
+                    sum += inputData[i] * inputData[i];
+                }
+                const rms = Math.sqrt(sum / inputData.length);
+                lastRms = rms;  // Store for auto-restart check in handleMessage
+
+                const now = Date.now();
+
+                // STATE MACHINE LOGIC
+                if (turnState === 'IDLE') {
+                    // Waiting for speech - check if speech starts
+                    if (rms > VAD_SPEECH_THRESHOLD) {
+                        // Speech detected! Send activity_start and transition to ACTIVE
+                        log(`Speech detected (RMS: ${rms.toFixed(4)}) - sending activity_start`, 'event');
+                        ws.send(JSON.stringify({ type: 'activity_start' }));
+
+                        // Invia overlap per continuità lessicale (dal turno precedente)
+                        if (overlapTail) {
+                            log(`Sending overlap: ${overlapTail.byteLength} bytes`, 'audio');
+                            ws.send(overlapTail);
+                            overlapTail = null;
+                        }
+
+                        setTurnState('ACTIVE');
+                        speechStartTime = now;  // Track when this turn started
+                        silenceStartTime = null;
+                        // DON'T return - continue to send this first chunk!
+                    } else {
+                        // In IDLE state with no speech, do NOT send audio chunks
+                        return;
+                    }
+                }
+
+                if (turnState === 'ACTIVE') {
+                    const turnDuration = now - speechStartTime;
+
+                    // MAX_TURN come SAFETY: chiudi solo se near-silence
+                    // NON troncare in piena sillaba!
+                    if (turnDuration >= MAX_TURN_MS && rms < VAD_SILENCE_THRESHOLD) {
+                        log(`Max turn ${turnDuration}ms near-silence - sending activity_end`, 'event');
+                        ws.send(JSON.stringify({ type: 'activity_end' }));
+                        setTurnState('WAIT_COMPLETE');
+                        silenceStartTime = null;
+                        return;
+                    }
+
+                    // Chiusura preferita: su silenzio vero (350ms)
+                    if (rms > VAD_SILENCE_THRESHOLD) {
+                        // Still speaking - reset silence timer
+                        silenceStartTime = null;
+                    } else {
+                        // Silence detected - start timer if not already started
+                        if (!silenceStartTime) {
+                            silenceStartTime = now;
+                        }
+
+                        // Check if silence duration exceeded threshold
+                        const silenceDuration = now - silenceStartTime;
+
+                        // Close turn on natural pauses
+                        if (silenceDuration >= VAD_SILENCE_DURATION_MS && turnDuration >= MIN_TURN_DURATION_MS) {
+                            log(`Silence ${silenceDuration}ms (turn ${turnDuration}ms) - sending activity_end`, 'event');
+                            ws.send(JSON.stringify({ type: 'activity_end' }));
+                            setTurnState('WAIT_COMPLETE');
+                            silenceStartTime = null;
+                            return;
+                        }
+                    }
+
+                    // Convert Float32 to Int16 and send audio
+                    const int16Data = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        const s = Math.max(-1, Math.min(1, inputData[i]));
+                        int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+
+                    // Salva tail per overlap (ultimi 250ms per continuità lessicale)
+                    const bytes = new Uint8Array(int16Data.buffer);
+                    if (bytes.byteLength >= OVERLAP_BYTES) {
+                        overlapTail = bytes.slice(bytes.byteLength - OVERLAP_BYTES).buffer;
+                    } else {
+                        overlapTail = int16Data.buffer;
+                    }
+
+                    ws.send(int16Data.buffer);
+                    return;
+                }
+
+                if (turnState === 'WAIT_COMPLETE') {
+                    // NON droppare! Continua a calcolare RMS e BUFFERIZZA audio
+                    // lastRms è già aggiornato sopra, quindi auto-restart userà RMS corrente
+
+                    // Converti e bufferizza
+                    const int16Data = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        const s = Math.max(-1, Math.min(1, inputData[i]));
+                        int16Data[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+
+                    // Limita la memoria: tieni solo gli ultimi ~2s
+                    pendingAudioChunks.push(int16Data.buffer);
+                    pendingBytes += int16Data.byteLength;
+                    while (pendingBytes > PENDING_MAX_BYTES) {
+                        const removed = pendingAudioChunks.shift();
+                        pendingBytes -= removed.byteLength;
+                    }
+                    return;
+                }
             };
 
             source.connect(processor);
@@ -468,6 +681,7 @@
             // Full duplex mode: don't mute microphone during playback
             // Echo cancellation should handle feedback
             // This allows speaking while translation is playing
+            log(`Queueing ${int16Data.length} samples for playback`, 'audio');
             audioQueue.push(int16Data);
             if (!isPlaying) {
                 playNextChunk();
@@ -480,6 +694,12 @@
                 return;
             }
 
+            // Ensure AudioContext is running (browsers suspend it until user interaction)
+            if (audioContext.state === 'suspended') {
+                log('Resuming AudioContext...', 'event');
+                await audioContext.resume();
+            }
+
             isPlaying = true;
             const int16Data = audioQueue.shift();
 
@@ -489,9 +709,12 @@
                 float32Data[i] = int16Data[i] / 32768;
             }
 
-            // Create audio buffer
+            // Create audio buffer at 16kHz (the sample rate of received audio)
+            // Note: AudioContext may resample internally if its sample rate differs
             const buffer = audioContext.createBuffer(1, float32Data.length, 16000);
             buffer.getChannelData(0).set(float32Data);
+
+            log(`Playing ${int16Data.length} samples (context: ${audioContext.sampleRate}Hz, state: ${audioContext.state})`, 'audio');
 
             // Play
             const source = audioContext.createBufferSource();

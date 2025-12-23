@@ -13,9 +13,12 @@ services:
     ports:
       - "8001:8001"
 
+    env_file:
+      - .env
+
     volumes:
       # Mount credentials file for Vertex AI authentication
-      - ./ai-tools-471809-5c89057d4ac6.json:/app/credentials.json:ro
+      - ${GOOGLE_CREDENTIALS_PATH:-./credentials.json}:/app/credentials.json:ro
       - ./logs:/app/logs
 
     environment:

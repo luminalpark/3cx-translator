@@ -26,7 +26,9 @@
       "Bash(timeout 10 docker logs:*)",
       "Bash(timeout 5 docker logs:*)",
       "Bash(timeout 30 docker logs:*)",
-      "Bash(timeout 60 docker logs:*)"
+      "Bash(timeout 60 docker logs:*)",
+      "Bash(git reset:*)",
+      "Bash(git push:*)"
     ]
   }
 }

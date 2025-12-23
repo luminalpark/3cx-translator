@@ -1276,7 +1276,7 @@ if __name__ == "__main__":
         config = ServerConfig.from_env()
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
-        logger.error("Please set GEMINI_API_KEY environment variable")
+        logger.error("Please check GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS environment variables")
         sys.exit(1)
 
     logger.info("=" * 60)

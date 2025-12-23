@@ -501,7 +501,7 @@ public class GeminiClient : IAsyncDisposable
                     break;
 
                 case "turn_complete":
-                    _logger.LogDebug("Turn complete");
+                    _logger.LogInformation(">>> TURN_COMPLETE received from server");
                     OnTurnComplete?.Invoke();
                     break;
 

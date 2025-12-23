@@ -55,6 +55,7 @@ public class TranslationWorker : BackgroundService
     private readonly List<byte[]> _inboundPendingChunks = new();  // Buffer during WAIT_COMPLETE
     private int _inboundPendingBytes = 0;
     private float _inboundLastRms = 0;                    // For auto-restart check
+    private float _inboundPeakRmsDuringWait = 0;          // Peak RMS during WAIT_COMPLETE
 
     // VAD state for outbound (operator speaking)
     private readonly List<byte> _outboundBuffer = new();
@@ -67,6 +68,7 @@ public class TranslationWorker : BackgroundService
     private readonly List<byte[]> _outboundPendingChunks = new();  // Buffer during WAIT_COMPLETE
     private int _outboundPendingBytes = 0;
     private float _outboundLastRms = 0;                   // For auto-restart check
+    private float _outboundPeakRmsDuringWait = 0;         // Peak RMS during WAIT_COMPLETE
 
     // Call simulation
     private FileAudioInjector? _fileAudioInjector;
@@ -559,14 +561,40 @@ public class TranslationWorker : BackgroundService
 
         try
         {
+            // During simulation with Manual VAD, manage the turn state properly
+            lock (_inboundLock)
+            {
+                if (_inboundTurnState == TurnState.IDLE)
+                {
+                    // No active turn - need to start one first
+                    _logger.LogInformation("  🔄 Turn timer: starting new turn (activity_start)");
+                    _ = _inboundClient.SendActivityStartAsync();
+                    _inboundTurnState = TurnState.ACTIVE;
+                    _inboundSpeechStart = DateTime.UtcNow;
+                    _inboundLastSpeech = DateTime.UtcNow;
+                    return;  // Let audio flow, end the turn on next timer tick
+                }
+
+                if (_inboundTurnState == TurnState.WAIT_COMPLETE)
+                {
+                    // Already waiting for turn_complete, don't send another activity_end
+                    _logger.LogDebug("  🔄 Turn timer: already waiting for turn_complete, skipping");
+                    return;
+                }
+            }
+
             _logger.LogInformation("  🔄 Turn timer: sending activity_end to trigger translation");
 
             // Send activity_end to trigger translation of buffered audio
-            // Server will automatically send activity_start after turn_complete
-            // if audio is still streaming
             await _inboundClient.SendActivityEndAsync();
 
-            _logger.LogInformation("  ✓ activity_end sent - server will auto-restart after turn_complete");
+            lock (_inboundLock)
+            {
+                _inboundTurnState = TurnState.WAIT_COMPLETE;
+                _inboundPeakRmsDuringWait = 0;
+            }
+
+            _logger.LogInformation("  ✓ activity_end sent - waiting for turn_complete");
         }
         catch (Exception ex)
         {
@@ -724,14 +752,22 @@ public class TranslationWorker : BackgroundService
         // Skip if client not connected or not in streaming mode
         if (_inboundClient == null || !_inboundClient.IsConnected || !_inboundClient.IsStreamingMode) return;
 
-        // During simulation, bypass VAD and send audio directly (even if translation is paused)
+        // During simulation, bypass VAD but still track energy for auto-restart logic
         if (_isSimulating)
         {
+            var energy = CalculateEnergy(audioData);
+            _inboundLastRms = energy;  // Update for auto-restart check after turn_complete
+
+            // Also update peak during WAIT_COMPLETE for auto-restart decision
+            if (_inboundTurnState == TurnState.WAIT_COMPLETE && energy > _inboundPeakRmsDuringWait)
+                _inboundPeakRmsDuringWait = energy;
+
             _ = _inboundClient.SendAudioChunkAsync(audioData);
             _simulationChunksSent++;
             if (_simulationChunksSent % 40 == 0)
             {
-                _logger.LogInformation("[SIMULATION] Chunks sent: {Count}", _simulationChunksSent);
+                _logger.LogInformation("[SIMULATION] Chunks sent: {Count}, RMS: {Rms:F4}, State: {State}",
+                    _simulationChunksSent, energy, _inboundTurnState);
             }
             return;
         }
@@ -754,7 +790,7 @@ public class TranslationWorker : BackgroundService
                 case TurnState.IDLE:
                     if (energy > _config.Vad.SpeechThreshold)
                     {
-                        _logger.LogDebug("[INBOUND] Speech detected (RMS: {Rms:F4}) - sending activity_start", energy);
+                        _logger.LogInformation("[INBOUND] Speech detected (RMS: {Rms:F4}) - sending activity_start", energy);
                         _ = _inboundClient.SendActivityStartAsync();
 
                         // Send overlap from previous turn for lexical continuity
@@ -769,7 +805,10 @@ public class TranslationWorker : BackgroundService
                         _inboundSpeechStart = now;
                         _inboundLastSpeech = now;
                         _inboundIsSpeaking = true;
-                        // Continue to send this chunk below (don't return)
+
+                        // CRITICAL: Also send THIS chunk - don't lose the first audio!
+                        SaveOverlapBuffer(audioData, ref _inboundOverlapTail);
+                        _ = _inboundClient.SendAudioChunkAsync(audioData);
                     }
                     else
                     {
@@ -788,6 +827,7 @@ public class TranslationWorker : BackgroundService
                         SaveOverlapBuffer(audioData, ref _inboundOverlapTail);
                         _ = _inboundClient.SendActivityEndAsync();
                         _inboundTurnState = TurnState.WAIT_COMPLETE;
+                        _inboundPeakRmsDuringWait = 0;  // Reset peak for new wait period
                         return;
                     }
 
@@ -807,6 +847,7 @@ public class TranslationWorker : BackgroundService
                             SaveOverlapBuffer(audioData, ref _inboundOverlapTail);
                             _ = _inboundClient.SendActivityEndAsync();
                             _inboundTurnState = TurnState.WAIT_COMPLETE;
+                            _inboundPeakRmsDuringWait = 0;  // Reset peak for new wait period
                             _inboundIsSpeaking = false;
                             return;
                         }
@@ -819,7 +860,9 @@ public class TranslationWorker : BackgroundService
 
                 case TurnState.WAIT_COMPLETE:
                     // DON'T drop audio! Buffer it during WAIT_COMPLETE
-                    // RMS is already saved above for auto-restart check
+                    // Track peak RMS for auto-restart decision
+                    if (energy > _inboundPeakRmsDuringWait)
+                        _inboundPeakRmsDuringWait = energy;
                     BufferPendingAudio(audioData, _inboundPendingChunks, ref _inboundPendingBytes, _config.Vad.PendingMaxBytes);
                     break;
             }
@@ -907,7 +950,7 @@ public class TranslationWorker : BackgroundService
                 case TurnState.IDLE:
                     if (energy > _config.Vad.SpeechThreshold)
                     {
-                        _logger.LogDebug("[OUTBOUND] Speech detected (RMS: {Rms:F4}) - sending activity_start", energy);
+                        _logger.LogInformation("[OUTBOUND] Speech detected (RMS: {Rms:F4}) - sending activity_start", energy);
                         _ = _outboundClient.SendActivityStartAsync();
 
                         // Send overlap from previous turn for lexical continuity
@@ -922,7 +965,10 @@ public class TranslationWorker : BackgroundService
                         _outboundSpeechStart = now;
                         _outboundLastSpeech = now;
                         _outboundIsSpeaking = true;
-                        // Continue to send this chunk below (don't return)
+
+                        // CRITICAL: Also send THIS chunk - don't lose the first audio!
+                        SaveOverlapBuffer(audioData, ref _outboundOverlapTail);
+                        _ = _outboundClient.SendAudioChunkAsync(audioData);
                     }
                     else
                     {
@@ -941,6 +987,7 @@ public class TranslationWorker : BackgroundService
                         SaveOverlapBuffer(audioData, ref _outboundOverlapTail);
                         _ = _outboundClient.SendActivityEndAsync();
                         _outboundTurnState = TurnState.WAIT_COMPLETE;
+                        _outboundPeakRmsDuringWait = 0;  // Reset peak for new wait period
                         return;
                     }
 
@@ -960,6 +1007,7 @@ public class TranslationWorker : BackgroundService
                             SaveOverlapBuffer(audioData, ref _outboundOverlapTail);
                             _ = _outboundClient.SendActivityEndAsync();
                             _outboundTurnState = TurnState.WAIT_COMPLETE;
+                            _outboundPeakRmsDuringWait = 0;  // Reset peak for new wait period
                             _outboundIsSpeaking = false;
                             return;
                         }
@@ -972,7 +1020,9 @@ public class TranslationWorker : BackgroundService
 
                 case TurnState.WAIT_COMPLETE:
                     // DON'T drop audio! Buffer it during WAIT_COMPLETE
-                    // RMS is already saved above for auto-restart check
+                    // Track peak RMS for auto-restart decision
+                    if (energy > _outboundPeakRmsDuringWait)
+                        _outboundPeakRmsDuringWait = energy;
                     BufferPendingAudio(audioData, _outboundPendingChunks, ref _outboundPendingBytes, _config.Vad.PendingMaxBytes);
                     break;
             }
@@ -1115,11 +1165,27 @@ public class TranslationWorker : BackgroundService
 
         lock (_inboundLock)
         {
-            _logger.LogDebug("[INBOUND] turn_complete received - checking for auto-restart (lastRms: {Rms:F4})", _inboundLastRms);
-
-            if (_inboundLastRms > _config.Vad.AutoRestartThreshold)
+            // During simulation, always auto-restart since audio file is still playing
+            if (_isSimulating)
             {
-                _logger.LogDebug("[INBOUND] Auto-restart (RMS: {Rms:F4}) - sending activity_start", _inboundLastRms);
+                _logger.LogInformation("[INBOUND] turn_complete during simulation - forcing auto-restart");
+                _ = _inboundClient.SendActivityStartAsync();
+                _inboundTurnState = TurnState.ACTIVE;
+                _inboundSpeechStart = DateTime.UtcNow;
+                _inboundLastSpeech = DateTime.UtcNow;
+                _inboundPeakRmsDuringWait = 0;
+                return;
+            }
+
+            // Use peak RMS during wait period for auto-restart decision
+            // This captures if there was speech activity while waiting for turn_complete
+            var rmsForRestart = Math.Max(_inboundLastRms, _inboundPeakRmsDuringWait);
+            _logger.LogInformation("[INBOUND] turn_complete - peakRms: {Peak:F4}, lastRms: {Last:F4}, threshold: {Threshold:F4}",
+                _inboundPeakRmsDuringWait, _inboundLastRms, _config.Vad.AutoRestartThreshold);
+
+            if (rmsForRestart > _config.Vad.AutoRestartThreshold)
+            {
+                _logger.LogInformation("[INBOUND] Auto-restart (RMS: {Rms:F4}) - sending activity_start", rmsForRestart);
                 _ = _inboundClient.SendActivityStartAsync();
 
                 // Send overlap for lexical continuity
@@ -1149,12 +1215,15 @@ public class TranslationWorker : BackgroundService
             }
             else
             {
-                _logger.LogDebug("[INBOUND] No auto-restart (RMS: {Rms:F4} < {Threshold}) - going IDLE",
-                    _inboundLastRms, _config.Vad.AutoRestartThreshold);
+                _logger.LogInformation("[INBOUND] No auto-restart (RMS: {Rms:F4} < {Threshold}) - going IDLE",
+                    rmsForRestart, _config.Vad.AutoRestartThreshold);
                 _inboundTurnState = TurnState.IDLE;
                 _inboundPendingChunks.Clear();
                 _inboundPendingBytes = 0;
             }
+
+            // Reset peak for next wait period
+            _inboundPeakRmsDuringWait = 0;
         }
     }
 
@@ -1167,11 +1236,15 @@ public class TranslationWorker : BackgroundService
 
         lock (_outboundLock)
         {
-            _logger.LogDebug("[OUTBOUND] turn_complete received - checking for auto-restart (lastRms: {Rms:F4})", _outboundLastRms);
+            // Use peak RMS during wait period for auto-restart decision
+            // This captures if there was speech activity while waiting for turn_complete
+            var rmsForRestart = Math.Max(_outboundLastRms, _outboundPeakRmsDuringWait);
+            _logger.LogInformation("[OUTBOUND] turn_complete - peakRms: {Peak:F4}, lastRms: {Last:F4}, threshold: {Threshold:F4}",
+                _outboundPeakRmsDuringWait, _outboundLastRms, _config.Vad.AutoRestartThreshold);
 
-            if (_outboundLastRms > _config.Vad.AutoRestartThreshold)
+            if (rmsForRestart > _config.Vad.AutoRestartThreshold)
             {
-                _logger.LogDebug("[OUTBOUND] Auto-restart (RMS: {Rms:F4}) - sending activity_start", _outboundLastRms);
+                _logger.LogInformation("[OUTBOUND] Auto-restart (RMS: {Rms:F4}) - sending activity_start", rmsForRestart);
                 _ = _outboundClient.SendActivityStartAsync();
 
                 // Send overlap for lexical continuity
@@ -1202,11 +1275,14 @@ public class TranslationWorker : BackgroundService
             else
             {
                 _logger.LogDebug("[OUTBOUND] No auto-restart (RMS: {Rms:F4} < {Threshold}) - going IDLE",
-                    _outboundLastRms, _config.Vad.AutoRestartThreshold);
+                    rmsForRestart, _config.Vad.AutoRestartThreshold);
                 _outboundTurnState = TurnState.IDLE;
                 _outboundPendingChunks.Clear();
                 _outboundPendingBytes = 0;
             }
+
+            // Reset peak for next wait period
+            _outboundPeakRmsDuringWait = 0;
         }
     }
 

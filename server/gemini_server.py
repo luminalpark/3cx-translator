@@ -618,8 +618,10 @@ Remember: Your output should ONLY be the translated speech in {target_name}."""
 
         if session.gemini_session and session.streaming_ready and not session.is_closing:
             try:
-                # Set flag BEFORE sending to prevent race with _send_loop
+                # Set flags BEFORE sending to prevent race with _send_loop
+                # CRITICAL: Reset waiting_for_turn_complete so audio can flow!
                 session.turn_active = True
+                session.waiting_for_turn_complete = False  # Allow audio to flow
                 session.chunks_sent = 0  # Reset for new turn
                 logger.info(f"[{session.session_id}] ════════════════════════════════════════════════════════════")
                 logger.info(f"[{session.session_id}] 🎙️  >>> ACTIVITY_START >>> (Manual VAD)")

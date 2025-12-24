@@ -1,0 +1,21 @@
+# WebSockets configuration for Janus
+general: {
+    json = "indented"
+    pingpong_trigger = 30
+    pingpong_timeout = 10
+
+    ws = true
+    ws_port = 8188
+    wss = false
+}
+
+admin: {
+    admin_ws = false
+    admin_wss = false
+}
+
+cors: {
+}
+
+certificates: {
+}

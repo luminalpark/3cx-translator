@@ -1,0 +1,35 @@
+# Janus HTTP Transport Configuration
+# For 3CX Translation Bridge
+
+general: {
+    # Enable JSON format
+    json = "indented"
+
+    # Base path
+    base_path = "/janus"
+}
+
+# HTTP (unencrypted - for development/health checks)
+http: {
+    http = true
+    http_port = 8088
+    http_ip = "0.0.0.0"
+    http_acl = "127.,192.168.,10."
+}
+
+# HTTPS (for production)
+https: {
+    https = false
+    # Uncomment for HTTPS:
+    # https = true
+    # https_port = 8089
+    # https_ip = "0.0.0.0"
+    # cert_pem = "/etc/janus/cert.pem"
+    # cert_key = "/etc/janus/cert.key"
+}
+
+# Admin API
+admin: {
+    admin_http = false
+    # admin_http_port = 7088
+}

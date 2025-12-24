@@ -1,0 +1,21 @@
+# Janus SIP Plugin Configuration
+# For 3CX Translation Bridge on Linux VM
+
+general: {
+    local_ip = "10.0.5.19"
+    sdp_ip = "10.0.5.19"
+    rtp_port_range = "10000-10100"
+    user_agent = "3CX-Translation-Bridge/1.0"
+    register_ttl = 3600
+    behind_nat = false  # No NAT - direct network access
+    keepalive_interval = 60
+}
+
+codecs: {
+    audio_codecs = "pcmu,pcma,opus"
+    video_codecs = ""
+}
+
+sofia: {
+    log_level = 5
+}

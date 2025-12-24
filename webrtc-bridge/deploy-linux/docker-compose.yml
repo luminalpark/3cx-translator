@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  janus:
+    image: canyan/janus-gateway:latest
+    container_name: janus-3cx-bridge
+    restart: unless-stopped
+    network_mode: host  # Direct network access - no NAT issues!
+    volumes:
+      - ./config/janus.jcfg:/usr/local/etc/janus/janus.jcfg:ro
+      - ./config/janus.plugin.sip.jcfg:/usr/local/etc/janus/janus.plugin.sip.jcfg:ro
+      - ./config/janus.transport.http.jcfg:/usr/local/etc/janus/janus.transport.http.jcfg:ro
+      - ./config/janus.transport.websockets.jcfg:/usr/local/etc/janus/janus.transport.websockets.jcfg:ro
+    environment:
+      - JANUS_ADMIN_SECRET=xK9mP2vL8nQ4wR7jF3hT6yB1cA5dG0sE

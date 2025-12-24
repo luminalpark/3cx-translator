@@ -112,6 +112,10 @@ public class TranslationWorker : BackgroundService
             _audioBridge.OnInboundAudioCaptured += OnInboundAudioCaptured;
             _audioBridge.OnOutboundAudioCaptured += OnOutboundAudioCaptured;
 
+            // Connect audio meter events for debug
+            _audioBridge.OnOutboundCaptureRms += rms => _trayService?.UpdateMicRms(rms);
+            _audioBridge.OnOutboundPlaybackRms += rms => _trayService?.UpdatePlaybackRms(rms);
+
             // Create and connect both WebSocket clients
             var loggerFactory = LoggerFactory.Create(builder => 
                 builder.AddConsole().SetMinimumLevel(LogLevel.Information));
@@ -214,6 +218,7 @@ public class TranslationWorker : BackgroundService
             _trayService.OnTestTranslationRequested += OnTestTranslationRequested;
             _trayService.OnSimulateCallRequested += OnSimulateCallRequested;
             _trayService.OnStopSimulationRequested += OnStopSimulationRequested;
+            _trayService.OnTestAudioTo3CXRequested += OnTestAudioTo3CXRequested;
             _trayService.OnVadSettingsOpened += OnVadSettingsOpened;
             _trayService.OnVadSettingsChanged += OnVadSettingsChanged;
             _trayService.Initialize();
@@ -622,6 +627,84 @@ public class TranslationWorker : BackgroundService
         {
             _logger.LogError(ex, "Error stopping call simulation");
         }
+    }
+
+    /// <summary>
+    /// Test audio playback directly to 3CX - bypasses mic capture and translation
+    /// This tests the path: Client .NET → VB-Cable B → 3CX → Caller
+    /// </summary>
+    private void OnTestAudioTo3CXRequested(string wavFilePath)
+    {
+        _logger.LogInformation("═══════════════════════════════════════════════════════════");
+        _logger.LogInformation("  🔊 TEST AUDIO → 3CX");
+        _logger.LogInformation("  File: {Path}", wavFilePath);
+        _logger.LogInformation("  Percorso: Client .NET → VB-Cable B → 3CX → Chiamante");
+        _logger.LogInformation("═══════════════════════════════════════════════════════════");
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                // Load WAV file
+                using var reader = new NAudio.Wave.AudioFileReader(wavFilePath);
+
+                _logger.LogInformation("[TEST-3CX] File loaded: {Duration:F1}s, {Format}",
+                    reader.TotalTime.TotalSeconds, reader.WaveFormat);
+
+                // Convert to 16kHz mono PCM16 (same as our standard format)
+                var targetFormat = new NAudio.Wave.WaveFormat(16000, 16, 1);
+                using var resampler = new NAudio.Wave.MediaFoundationResampler(reader, targetFormat);
+                resampler.ResamplerQuality = 60;
+
+                // Read all audio and convert to bytes
+                var buffer = new byte[4096];
+                using var ms = new MemoryStream();
+                int bytesRead;
+                while ((bytesRead = resampler.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    ms.Write(buffer, 0, bytesRead);
+                }
+
+                var audioData = ms.ToArray();
+                _logger.LogInformation("[TEST-3CX] Converted: {Bytes} bytes ({Duration:F1}s)",
+                    audioData.Length, audioData.Length / 32000.0);
+
+                // Send in chunks (100ms each = 3200 bytes at 16kHz mono 16-bit)
+                const int chunkSize = 3200;
+                var chunkCount = 0;
+                var totalChunks = (audioData.Length + chunkSize - 1) / chunkSize;
+
+                _logger.LogInformation("[TEST-3CX] Sending {Total} chunks to VB-Cable B...", totalChunks);
+
+                for (int offset = 0; offset < audioData.Length; offset += chunkSize)
+                {
+                    var remaining = audioData.Length - offset;
+                    var size = Math.Min(chunkSize, remaining);
+                    var chunk = new byte[size];
+                    Array.Copy(audioData, offset, chunk, 0, size);
+
+                    // Send directly to outbound playback (VB-Cable B → 3CX)
+                    _audioBridge.PlayOutboundAudio(chunk);
+                    chunkCount++;
+
+                    if (chunkCount % 10 == 0 || chunkCount == totalChunks)
+                    {
+                        _logger.LogInformation("[TEST-3CX] Sent chunk {Current}/{Total}",
+                            chunkCount, totalChunks);
+                    }
+
+                    // Wait 100ms between chunks for real-time playback
+                    await Task.Delay(100);
+                }
+
+                _logger.LogInformation("[TEST-3CX] ✓ Audio inviato! Il chiamante dovrebbe sentirlo.");
+                _logger.LogInformation("═══════════════════════════════════════════════════════════");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[TEST-3CX] Errore durante il test audio");
+            }
+        });
     }
 
     private void OnAutoDetectEnabled()

@@ -1,0 +1,50 @@
+# Janus SIP Plugin Configuration
+# For 3CX Translation Bridge
+
+general: {
+    # Local SIP port
+    local_ip = "auto"
+
+    # SDP IP - MUST be the host machine IP that 3CX can reach
+    # This tells 3CX where to send RTP audio packets
+    sdp_ip = "10.0.5.7"
+
+    # RTP port range for SIP media - MUST match Docker port mappings!
+    rtp_port_range = "10000-10100"
+
+    # User-Agent string
+    user_agent = "3CX-Translation-Bridge/1.0"
+
+    # Registration TTL
+    register_ttl = 3600
+
+    # Enable behind-NAT mode
+    behind_nat = true
+
+    # Keep-alive interval (seconds)
+    keepalive_interval = 60
+
+    # SIP timers
+    #register_timeout = 60
+    #invite_timeout = 120
+
+    # SRTP disabled - 3CX uses plain RTP/AVP
+    # srtp = "sdes_optional"
+}
+
+# Codec preferences
+# 3CX typically supports: PCMA (G.711 alaw), PCMU (G.711 ulaw), Opus
+codecs: {
+    # Priority order (first = highest priority)
+    # Using PCMU/PCMA first for direct passthrough to WebRTC (no transcoding)
+    audio_codecs = "pcmu,pcma,opus"
+
+    # Video disabled for translation bridge
+    video_codecs = ""
+}
+
+# Sofia-SIP logging (for debugging)
+sofia: {
+    # Log level: 0-9 (0=none, 9=max)
+    log_level = 9
+}

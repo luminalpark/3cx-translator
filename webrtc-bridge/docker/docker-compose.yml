@@ -1,0 +1,28 @@
+services:
+  janus:
+    image: canyan/janus-gateway:latest
+    container_name: janus-webrtc-bridge
+    restart: unless-stopped
+    # On Windows Docker Desktop, network_mode: host doesn't work
+    # Use explicit port mappings instead
+    ports:
+      - "8188:8188"     # WebSocket API (Janus protocol)
+      - "8088:8088"     # HTTP REST API
+      - "8089:8089"     # HTTPS REST API (if enabled)
+      - "5060:5060/udp" # SIP UDP (for 3CX registration)
+      - "5060:5060/tcp" # SIP TCP
+      - "10000-10100:10000-10100/udp"  # RTP media ports (reduced range for Windows)
+    volumes:
+      - ./janus/jcfg/janus.jcfg:/usr/local/etc/janus/janus.jcfg:ro
+      - ./janus/jcfg/janus.plugin.sip.jcfg:/usr/local/etc/janus/janus.plugin.sip.jcfg:ro
+      - ./janus/jcfg/janus.transport.http.jcfg:/usr/local/etc/janus/janus.transport.http.jcfg:ro
+      - ./janus/jcfg/janus.transport.websockets.jcfg:/usr/local/etc/janus/janus.transport.websockets.jcfg:ro
+    environment:
+      - JANUS_ADMIN_SECRET=xK9mP2vL8nQ4wR7jF3hT6yB1cA5dG0sE
+      - JANUS_API_SECRET=hY7nM3kR9pT2wQ5jL8vF1bX4cA6dG0sN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/janus/info"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

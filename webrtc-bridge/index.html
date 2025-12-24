@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3CX Translation Bridge - WebRTC</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>3CX Translation Bridge</h1>
+            <p class="subtitle">WebRTC SIP Extension for Real-time Translation</p>
+        </header>
+
+        <!-- Connection Panel -->
+        <div class="panel" id="connectionPanel">
+            <h3>Connection Settings</h3>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="janusUrl">Janus Server</label>
+                    <input type="text" id="janusUrl" value="ws://10.0.5.19:8188" placeholder="ws://10.0.5.19:8188">
+                </div>
+                <div class="form-group">
+                    <label for="sipServer">3CX SIP Server</label>
+                    <input type="text" id="sipServer" placeholder="192.168.1.100:5060">
+                </div>
+                <div class="form-group">
+                    <label for="sipExtension">Extension</label>
+                    <input type="text" id="sipExtension" value="900" placeholder="900">
+                </div>
+                <div class="form-group">
+                    <label for="sipAuthUser">Auth ID</label>
+                    <input type="text" id="sipAuthUser" placeholder="jPQNZV7EtB (from 3CX)">
+                </div>
+                <div class="form-group">
+                    <label for="sipPassword">Password</label>
+                    <input type="password" id="sipPassword" placeholder="Extension password">
+                </div>
+            </div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="geminiUrl">Gemini Server</label>
+                    <input type="text" id="geminiUrl" value="ws://localhost:8001/ws/translate" placeholder="ws://localhost:8001/ws/translate">
+                </div>
+                <div class="form-group">
+                    <label for="sourceLang">Remote Speaker Language</label>
+                    <select id="sourceLang">
+                        <option value="en">English</option>
+                        <option value="de">German</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="it">Italian</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="targetLang">Your Language</label>
+                    <select id="targetLang">
+                        <option value="it">Italian</option>
+                        <option value="en">English</option>
+                        <option value="de">German</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="audioInput">Microphone</label>
+                    <select id="audioInput">
+                        <option value="">Loading devices...</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="audioOutput">Speaker/Headphones</label>
+                    <select id="audioOutput">
+                        <option value="">Loading devices...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="button-row">
+                <button id="connectBtn" onclick="connect()">Connect</button>
+                <button id="disconnectBtn" onclick="disconnect()" disabled class="secondary">Disconnect</button>
+            </div>
+        </div>
+
+        <!-- Status Panel -->
+        <div class="panel" id="statusPanel">
+            <div class="status-row">
+                <div class="status-item">
+                    <div class="status-dot" id="janusStatus"></div>
+                    <span>Janus</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="sipStatus"></div>
+                    <span>SIP</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="geminiInboundStatus"></div>
+                    <span>Gemini In</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="geminiOutboundStatus"></div>
+                    <span>Gemini Out</span>
+                </div>
+                <div class="status-item">
+                    <div class="status-dot" id="callStatus"></div>
+                    <span id="callStatusText">No Call</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Call Panel -->
+        <div class="panel" id="callPanel">
+            <h3>Call Control</h3>
+
+            <!-- Incoming Call Alert -->
+            <div class="incoming-call" id="incomingCallAlert" style="display: none;">
+                <div class="caller-info">
+                    <span class="caller-icon">📞</span>
+                    <span id="callerNumber">Unknown</span>
+                </div>
+                <div class="call-actions">
+                    <button class="answer-btn" onclick="answerCall()">Answer</button>
+                    <button class="reject-btn" onclick="rejectCall()">Reject</button>
+                </div>
+            </div>
+
+            <!-- Dialpad -->
+            <div class="dialpad-section">
+                <div class="dial-input">
+                    <input type="text" id="dialNumber" placeholder="Enter number or extension" onkeypress="handleDialKeypress(event)">
+                    <button class="call-btn" onclick="makeCall()" id="dialBtn" disabled>
+                        <span class="call-icon">📞</span>
+                    </button>
+                </div>
+                <div class="dialpad" id="dialpad">
+                    <button onclick="dialDigit('1')">1</button>
+                    <button onclick="dialDigit('2')">2<br><small>ABC</small></button>
+                    <button onclick="dialDigit('3')">3<br><small>DEF</small></button>
+                    <button onclick="dialDigit('4')">4<br><small>GHI</small></button>
+                    <button onclick="dialDigit('5')">5<br><small>JKL</small></button>
+                    <button onclick="dialDigit('6')">6<br><small>MNO</small></button>
+                    <button onclick="dialDigit('7')">7<br><small>PQRS</small></button>
+                    <button onclick="dialDigit('8')">8<br><small>TUV</small></button>
+                    <button onclick="dialDigit('9')">9<br><small>WXYZ</small></button>
+                    <button onclick="dialDigit('*')">*</button>
+                    <button onclick="dialDigit('0')">0<br><small>+</small></button>
+                    <button onclick="dialDigit('#')">#</button>
+                </div>
+            </div>
+
+            <!-- Active Call Controls -->
+            <div class="active-call-controls" id="activeCallControls" style="display: none;">
+                <div class="call-timer" id="callTimer">00:00</div>
+                <div class="call-buttons">
+                    <button id="muteBtn" onclick="toggleMute()" class="control-btn">
+                        <span class="icon">🎤</span>
+                        <span>Mute</span>
+                    </button>
+                    <button id="holdBtn" onclick="toggleHold()" class="control-btn">
+                        <span class="icon">⏸️</span>
+                        <span>Hold</span>
+                    </button>
+                    <button id="hangupBtn" onclick="hangupCall()" class="control-btn hangup">
+                        <span class="icon">📵</span>
+                        <span>Hangup</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Translation Panel -->
+        <div class="panel" id="translationPanel">
+            <h3>Live Translation</h3>
+
+            <!-- Audio Meters -->
+            <div class="audio-meters">
+                <div class="audio-meter">
+                    <div class="meter-label">
+                        <span class="meter-icon">🎧</span>
+                        <span>IN (Remote)</span>
+                    </div>
+                    <div class="meter-bar-container">
+                        <div class="meter-bar" id="audioMeterIn"></div>
+                        <div class="meter-peak" id="audioMeterInPeak"></div>
+                    </div>
+                    <span class="meter-db" id="audioDbIn">-∞ dB</span>
+                </div>
+                <div class="audio-meter">
+                    <div class="meter-label">
+                        <span class="meter-icon">🎤</span>
+                        <span>OUT (You)</span>
+                    </div>
+                    <div class="meter-bar-container">
+                        <div class="meter-bar" id="audioMeterOut"></div>
+                        <div class="meter-peak" id="audioMeterOutPeak"></div>
+                    </div>
+                    <span class="meter-db" id="audioDbOut">-∞ dB</span>
+                </div>
+            </div>
+
+            <div class="translation-display">
+                <div class="translation-direction">
+                    <span class="direction-label">Inbound (Remote → You)</span>
+                    <div class="vad-indicator" id="inboundVad">IDLE</div>
+                </div>
+                <div class="translation-text">
+                    <div class="source-text" id="inboundSource"></div>
+                    <div class="translated-text" id="inboundTranslated"></div>
+                </div>
+            </div>
+            <div class="translation-display">
+                <div class="translation-direction">
+                    <span class="direction-label">Outbound (You → Remote)</span>
+                    <div class="vad-indicator" id="outboundVad">IDLE</div>
+                </div>
+                <div class="translation-text">
+                    <div class="source-text" id="outboundSource"></div>
+                    <div class="translated-text" id="outboundTranslated"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VAD Settings (Collapsible) -->
+        <div class="panel collapsible" id="vadPanel">
+            <div class="panel-header" onclick="togglePanel('vadContent')">
+                <h3>VAD Settings</h3>
+                <span class="toggle-icon">▶</span>
+            </div>
+            <div class="panel-content" id="vadContent" style="display: none;">
+                <div class="vad-meters">
+                    <div class="meter-group">
+                        <label>Inbound RMS</label>
+                        <div class="rms-bar-container">
+                            <div class="rms-bar" id="inboundRmsBar"></div>
+                        </div>
+                        <span class="rms-value" id="inboundRmsValue">0.0000</span>
+                    </div>
+                    <div class="meter-group">
+                        <label>Outbound RMS</label>
+                        <div class="rms-bar-container">
+                            <div class="rms-bar" id="outboundRmsBar"></div>
+                        </div>
+                        <span class="rms-value" id="outboundRmsValue">0.0000</span>
+                    </div>
+                </div>
+                <div class="vad-controls">
+                    <div class="vad-control">
+                        <label>Speech Threshold: <span id="speechThresholdValue">0.012</span></label>
+                        <input type="range" id="speechThreshold" min="0.001" max="0.05" step="0.001" value="0.012" oninput="updateVadParam('speech', this.value)">
+                    </div>
+                    <div class="vad-control">
+                        <label>Silence Threshold: <span id="silenceThresholdValue">0.006</span></label>
+                        <input type="range" id="silenceThreshold" min="0.001" max="0.03" step="0.001" value="0.006" oninput="updateVadParam('silence', this.value)">
+                    </div>
+                    <div class="vad-control">
+                        <label>Silence Duration (ms): <span id="silenceDurationValue">350</span></label>
+                        <input type="range" id="silenceDuration" min="100" max="1000" step="50" value="350" oninput="updateVadParam('silenceDuration', this.value)">
+                    </div>
+                </div>
+                <div class="vad-presets">
+                    <button onclick="applyVadPreset('voip')">📞 VoIP</button>
+                    <button onclick="applyVadPreset('quiet')">🤫 Quiet</button>
+                    <button onclick="applyVadPreset('noisy')">🔊 Noisy</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Event Log (Collapsible) -->
+        <div class="panel collapsible" id="logPanel">
+            <div class="panel-header" onclick="togglePanel('logContent')">
+                <h3>Event Log</h3>
+                <span class="toggle-icon">▶</span>
+            </div>
+            <div class="panel-content" id="logContent" style="display: none;">
+                <div class="log" id="log"></div>
+                <button onclick="clearLog()" class="secondary small">Clear Log</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden audio elements -->
+    <audio id="remoteAudio" autoplay></audio>
+    <audio id="localAudio" muted></audio>
+
+    <!-- Scripts -->
+    <!-- WebRTC adapter for browser compatibility -->
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+    <!-- Janus Gateway JavaScript API - load from local or fallback to building from source -->
+    <script src="js/janus.js" onerror="console.error('janus.js not found - please run setup.ps1 or download manually')"></script>
+    <script src="js/vad.js"></script>
+    <script src="js/gemini-client.js"></script>
+    <script src="js/sip-handler.js"></script>
+    <script src="js/bridge-app.js"></script>
+</body>
+</html>

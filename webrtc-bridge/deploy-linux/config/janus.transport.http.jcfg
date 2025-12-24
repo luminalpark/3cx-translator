@@ -1,0 +1,16 @@
+# HTTP transport configuration
+general: {
+    json = "indented"
+    base_path = "/janus"
+    http = true
+    port = 8088
+    https = false
+}
+
+admin: {
+    admin_base_path = "/admin"
+    admin_http = false
+}
+
+cors: {
+}

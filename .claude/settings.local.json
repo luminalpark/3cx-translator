@@ -29,7 +29,31 @@
       "Bash(timeout 60 docker logs:*)",
       "Bash(git reset:*)",
       "Bash(git push:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(powershell:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker cp:*)",
+      "Bash(docker ps:*)",
+      "Bash(ipconfig:*)",
+      "Bash(ping:*)",
+      "Bash(docker run:*)",
+      "Bash(docker restart:*)",
+      "Bash(timeout 15 docker logs:*)",
+      "Bash(docker search:*)",
+      "Bash(timeout 20 docker logs:*)",
+      "Bash(docker port:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker network inspect:*)",
+      "Bash(route print:*)",
+      "Bash(wsl --list --verbose)",
+      "Bash(wsl:*)",
+      "Bash(timeout 30 bash -c 'until docker info >/dev/null 2>&1; do echo \"\"Waiting for Docker...\"\"; sleep 2; done; echo \"\"Docker is ready\"\"')",
+      "Bash(timeout 60 bash:*)",
+      "Bash(tracert:*)",
+      "Bash(netsh advfirewall firewall show:*)",
+      "Bash(mkdir:*)",
+      "Bash(ssh:*)",
+      "Bash(docker stop:*)"
     ]
   }
 }

@@ -102,6 +102,11 @@ public class TrayIconService : IDisposable
     public event Action? OnStopSimulationRequested;
 
     /// <summary>
+    /// Fired when test audio should be played to 3CX (outbound playback test)
+    /// </summary>
+    public event Action<string>? OnTestAudioTo3CXRequested;
+
+    /// <summary>
     /// Fired when VAD settings dialog is opened
     /// Returns callbacks for live RMS and turn state display
     /// </summary>
@@ -116,6 +121,10 @@ public class TrayIconService : IDisposable
     private ToolStripMenuItem? _simulateItem;
     private ToolStripMenuItem? _stopSimulateItem;
     private bool _isSimulating = false;
+
+    // Audio meter form
+    private AudioMeterForm? _audioMeterForm;
+    private ToolStripMenuItem? _audioMeterItem;
 
     // Supported languages for the menu
     private static readonly Dictionary<string, (string Flag, string Italian, string English)> SupportedLanguages = new()
@@ -301,6 +310,22 @@ public class TrayIconService : IDisposable
         _stopSimulateItem.Click += (s, e) => StopCallSimulation();
         _contextMenu.Items.Add(_stopSimulateItem);
 
+        // === TEST AUDIO TO 3CX ===
+        var testAudioTo3CXItem = new ToolStripMenuItem("🔊 Test Audio → 3CX...")
+        {
+            ToolTipText = "Invia file audio direttamente a 3CX (bypassa microfono e traduzione)"
+        };
+        testAudioTo3CXItem.Click += (s, e) => TestAudioTo3CX();
+        _contextMenu.Items.Add(testAudioTo3CXItem);
+
+        // === AUDIO METER ===
+        _audioMeterItem = new ToolStripMenuItem("📊 Audio Meter (Debug)")
+        {
+            ToolTipText = "Mostra/nascondi finestra meter per debug audio outbound"
+        };
+        _audioMeterItem.Click += (s, e) => ToggleAudioMeter();
+        _contextMenu.Items.Add(_audioMeterItem);
+
         // === VAD SETTINGS ===
         var vadSettingsItem = new ToolStripMenuItem("⚙️ Impostazioni VAD...")
         {
@@ -310,6 +335,13 @@ public class TrayIconService : IDisposable
         _contextMenu.Items.Add(vadSettingsItem);
 
         // === DIAGNOSTIC SECTION ===
+        var deviceListItem = new ToolStripMenuItem("🔌 Lista Dispositivi Audio...")
+        {
+            ToolTipText = "Mostra tutti i dispositivi audio disponibili per diagnostica"
+        };
+        deviceListItem.Click += (s, e) => OpenDeviceListDialog();
+        _contextMenu.Items.Add(deviceListItem);
+
         var diagnosticItem = new ToolStripMenuItem("🔬 Diagnostica Streaming...")
         {
             ToolTipText = "Test diagnostico: invia file audio e salva output per analisi"
@@ -1110,6 +1142,34 @@ public class TrayIconService : IDisposable
     }
 
     /// <summary>
+    /// Open device list dialog for diagnostic purposes
+    /// </summary>
+    private void OpenDeviceListDialog()
+    {
+        _logger.LogInformation("Opening device list dialog");
+
+        Task.Run(() =>
+        {
+            try
+            {
+                var thread = new Thread(() =>
+                {
+                    Application.EnableVisualStyles();
+                    using var dialog = new DeviceListDialog(_config.AudioDevices.OutboundCaptureDevice);
+                    dialog.ShowDialog();
+                });
+                thread.SetApartmentState(ApartmentState.STA);
+                thread.Start();
+                thread.Join();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error opening device list dialog");
+            }
+        });
+    }
+
+    /// <summary>
     /// Open diagnostic dialog for streaming translation testing
     /// </summary>
     private void OpenDiagnosticDialog()
@@ -1208,6 +1268,42 @@ public class TrayIconService : IDisposable
     }
 
     /// <summary>
+    /// Test audio playback directly to 3CX (bypasses mic capture and translation)
+    /// </summary>
+    private void TestAudioTo3CX()
+    {
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Seleziona file audio da inviare a 3CX",
+            Filter = "File WAV|*.wav|Tutti i file audio|*.wav;*.mp3|Tutti i file|*.*",
+            FilterIndex = 1,
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        // Try to find default location (tools folder)
+        var toolsPath = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "tools");
+        if (Directory.Exists(toolsPath))
+        {
+            dialog.InitialDirectory = Path.GetFullPath(toolsPath);
+        }
+
+        if (dialog.ShowDialog() == DialogResult.OK)
+        {
+            var filePath = dialog.FileName;
+            var fileName = Path.GetFileName(filePath);
+
+            _logger.LogInformation("Test audio to 3CX: {Path}", filePath);
+
+            // Fire event
+            OnTestAudioTo3CXRequested?.Invoke(filePath);
+
+            ShowNotification("Test Audio → 3CX",
+                $"File: {fileName}\n\nL'audio verrà inviato direttamente a VB-Cable B → 3CX.\nIl chiamante dovrebbe sentirlo.");
+        }
+    }
+
+    /// <summary>
     /// Update simulation state (can be called externally when simulation completes)
     /// </summary>
     public void UpdateSimulationState(bool isSimulating, string? fileName)
@@ -1247,8 +1343,66 @@ public class TrayIconService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Toggle Audio Meter window visibility
+    /// </summary>
+    private void ToggleAudioMeter()
+    {
+        if (_audioMeterForm == null || _audioMeterForm.IsDisposed)
+        {
+            _audioMeterForm = new AudioMeterForm();
+        }
+
+        if (_audioMeterForm.Visible)
+        {
+            _audioMeterForm.Hide();
+            if (_audioMeterItem != null)
+                _audioMeterItem.Checked = false;
+        }
+        else
+        {
+            _audioMeterForm.Show();
+            if (_audioMeterItem != null)
+                _audioMeterItem.Checked = true;
+        }
+    }
+
+    /// <summary>
+    /// Update mic capture RMS in audio meter
+    /// </summary>
+    public void UpdateMicRms(float rms)
+    {
+        if (_audioMeterForm != null && _audioMeterForm.Visible && !_audioMeterForm.IsDisposed)
+        {
+            _audioMeterForm.UpdateMicRms(rms);
+        }
+    }
+
+    /// <summary>
+    /// Update playback RMS in audio meter
+    /// </summary>
+    public void UpdatePlaybackRms(float rms)
+    {
+        if (_audioMeterForm != null && _audioMeterForm.Visible && !_audioMeterForm.IsDisposed)
+        {
+            _audioMeterForm.UpdatePlaybackRms(rms);
+        }
+    }
+
+    /// <summary>
+    /// Update VAD state in audio meter
+    /// </summary>
+    public void UpdateVadState(string state)
+    {
+        if (_audioMeterForm != null && _audioMeterForm.Visible && !_audioMeterForm.IsDisposed)
+        {
+            _audioMeterForm.UpdateVadState(state);
+        }
+    }
+
     public void Dispose()
     {
+        _audioMeterForm?.Dispose();
         _trayIcon?.Dispose();
         _contextMenu?.Dispose();
     }

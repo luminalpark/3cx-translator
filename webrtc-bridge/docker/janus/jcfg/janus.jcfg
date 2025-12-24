@@ -1,0 +1,79 @@
+# Janus Gateway Configuration
+# For 3CX Translation Bridge
+
+general: {
+    configs_folder = "/etc/janus"
+    plugins_folder = "/usr/local/lib/janus/plugins"
+    transports_folder = "/usr/local/lib/janus/transports"
+    events_folder = "/usr/local/lib/janus/events"
+    loggers_folder = "/usr/local/lib/janus/loggers"
+
+    debug_level = 7  # Maximum debug for RTP relay troubleshooting
+
+    # Admin/Monitor
+    admin_secret = "xK9mP2vL8nQ4wR7jF3hT6yB1cA5dG0sE"
+
+    # API secret disabled for local development
+    # api_secret = "janusapi"
+
+    # Token based authentication (disabled)
+    token_auth = false
+
+    # Server name
+    server_name = "3CX Translation Bridge"
+}
+
+# Certificate for DTLS (WebRTC)
+certificates: {
+    # Use self-signed for development
+    # For production, use Let's Encrypt or similar
+}
+
+# Media configuration
+media: {
+    # IPv4 only (simplify NAT)
+    ipv6 = false
+
+    # RTP port range - MUST match Docker port mappings!
+    rtp_port_range = "10000-10100"
+
+    # DSCP for QoS
+    dscp = 46  # EF (Expedited Forwarding)
+}
+
+# NAT configuration
+nat: {
+    # Enable ICE-Lite for simpler NAT handling
+    ice_lite = false
+
+    # Enable TCP candidates for ICE
+    ice_tcp = false
+
+    # Enable full-trickle ICE
+    full_trickle = true
+
+    # STUN server (Google's public STUN)
+    stun_server = "stun.l.google.com"
+    stun_port = 19302
+
+    # TURN server (uncomment and configure for production)
+    # turn_server = "your-turn-server.com"
+    # turn_port = 3478
+    # turn_type = "udp"
+    # turn_user = "turnuser"
+    # turn_pwd = "turnpassword"
+
+    # NAT 1:1 mapping - announce host IP to external peers
+    nat_1_1_mapping = "10.0.5.7"
+}
+
+# Plugins to load
+plugins: {
+    # SIP plugin for 3CX integration
+    disable = ""
+}
+
+# Transports to load
+transports: {
+    disable = ""
+}

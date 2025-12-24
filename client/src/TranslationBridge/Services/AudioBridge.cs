@@ -29,9 +29,15 @@ public class AudioBridge : IDisposable
     // Outbound: Operator audio (to 3CX)
     private WasapiCapture? _outboundCapture;
     private AudioPlaybackBuffer? _outboundPlaybackBuffer;  // Buffered playback with preroll
-    
+
     private readonly WaveFormat _waveFormat;
     private bool _isRunning;
+
+    // Metering for debug
+    private int _outboundCaptureChunkCount;
+    private int _outboundPlaybackChunkCount;
+    private int _inboundCaptureChunkCount;
+    private int _inboundPlaybackChunkCount;
 
     /// <summary>
     /// Fired when INBOUND audio is captured (remote party speaking)
@@ -44,6 +50,26 @@ public class AudioBridge : IDisposable
     /// This audio needs to be translated FROM local language TO remote language
     /// </summary>
     public event Action<byte[]>? OnOutboundAudioCaptured;
+
+    /// <summary>
+    /// Fired with RMS level of outbound capture (operator mic) for metering
+    /// </summary>
+    public event Action<float>? OnOutboundCaptureRms;
+
+    /// <summary>
+    /// Fired with RMS level of outbound playback (to 3CX) for metering
+    /// </summary>
+    public event Action<float>? OnOutboundPlaybackRms;
+
+    /// <summary>
+    /// Fired with RMS level of inbound capture (from 3CX) for metering
+    /// </summary>
+    public event Action<float>? OnInboundCaptureRms;
+
+    /// <summary>
+    /// Fired with RMS level of inbound playback (to operator) for metering
+    /// </summary>
+    public event Action<float>? OnInboundPlaybackRms;
 
     public bool IsRunning => _isRunning;
 
@@ -152,18 +178,26 @@ public class AudioBridge : IDisposable
         // ============================================================
         
         // 3. Capture from operator's microphone
+        _logger.LogInformation("=== OUTBOUND MIC DEVICE SEARCH ===");
+        _logger.LogInformation("Config OutboundCaptureDevice: \"{ConfigDevice}\"", _config.AudioDevices.OutboundCaptureDevice);
+
         var outboundCaptureDevice = FindDevice(
             enumerator,
             _config.AudioDevices.OutboundCaptureDevice,
             DataFlow.Capture);
-        
+
         if (outboundCaptureDevice == null)
         {
             // Fall back to default microphone
             outboundCaptureDevice = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
-            _logger.LogWarning("Using default microphone for operator capture");
+            _logger.LogWarning("!!! NO MATCH for \"{ConfigDevice}\" in capture devices!", _config.AudioDevices.OutboundCaptureDevice);
+            _logger.LogWarning("!!! Using DEFAULT microphone: {Device}", outboundCaptureDevice.FriendlyName);
         }
-        _logger.LogInformation("Outbound Capture (Operator Mic): {Device}", outboundCaptureDevice.FriendlyName);
+        else
+        {
+            _logger.LogInformation("MATCHED capture device: {Device}", outboundCaptureDevice.FriendlyName);
+        }
+        _logger.LogInformation("=== OUTBOUND MIC: {Device} ===", outboundCaptureDevice.FriendlyName);
         
         // 4. Playback to VB-Cable B (which 3CX sees as microphone)
         var outboundPlaybackDevice = FindDevice(
@@ -251,6 +285,19 @@ public class AudioBridge : IDisposable
     /// </summary>
     public void PlayOutboundAudio(byte[] audioData)
     {
+        _outboundPlaybackChunkCount++;
+
+        // Calculate RMS for metering
+        var rms = CalculateRms(audioData);
+        OnOutboundPlaybackRms?.Invoke(rms);
+
+        // Log every chunk for debugging outbound issues
+        if (_outboundPlaybackChunkCount % 10 == 0 || _outboundPlaybackChunkCount <= 5)
+        {
+            _logger.LogInformation("[OUTBOUND-PLAY] #{Count}: {Bytes}B, RMS={Rms:F4} → VB-Cable B",
+                _outboundPlaybackChunkCount, audioData.Length, rms);
+        }
+
         _outboundPlaybackBuffer?.AddAudio(audioData);
     }
 
@@ -268,10 +315,24 @@ public class AudioBridge : IDisposable
     private void OnOutboundDataAvailable(object? sender, WaveInEventArgs e)
     {
         if (e.BytesRecorded == 0) return;
-        
+
         var convertedData = ConvertAudio(e.Buffer, e.BytesRecorded, _outboundCapture!.WaveFormat);
         if (convertedData.Length > 0)
         {
+            _outboundCaptureChunkCount++;
+
+            // Calculate RMS for metering
+            var rms = CalculateRms(convertedData);
+            OnOutboundCaptureRms?.Invoke(rms);
+
+            // Log every 50 chunks
+            if (_outboundCaptureChunkCount % 50 == 0)
+            {
+                var label = rms > 0.01f ? "speech" : "silence";
+                _logger.LogInformation("[OUTBOUND-MIC] #{Count}: {Bytes}B, RMS={Rms:F4} ({Label})",
+                    _outboundCaptureChunkCount, convertedData.Length, rms, label);
+            }
+
             OnOutboundAudioCaptured?.Invoke(convertedData);
         }
     }
@@ -366,6 +427,29 @@ public class AudioBridge : IDisposable
     {
         var devices = enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active);
         return string.Join("\n", devices.Select(d => $"  - {d.FriendlyName}"));
+    }
+
+    /// <summary>
+    /// Calculate RMS (Root Mean Square) of PCM16 audio data for metering
+    /// </summary>
+    private static float CalculateRms(byte[] pcm16Data)
+    {
+        if (pcm16Data.Length < 2) return 0f;
+
+        long sumOfSquares = 0;
+        int sampleCount = pcm16Data.Length / 2;
+
+        for (int i = 0; i < pcm16Data.Length - 1; i += 2)
+        {
+            short sample = BitConverter.ToInt16(pcm16Data, i);
+            sumOfSquares += (long)sample * sample;
+        }
+
+        double meanSquare = (double)sumOfSquares / sampleCount;
+        double rms = Math.Sqrt(meanSquare);
+
+        // Normalize to 0.0-1.0 range (max PCM16 value is 32767)
+        return (float)(rms / 32767.0);
     }
 
     public void Dispose()
